@@ -1,7 +1,6 @@
 //! /c mode: minimal settings dialog from an in-code DLGTEMPLATE.
 
 use crate::settings::{self, Settings};
-use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::*;

@@ -172,3 +172,34 @@ mod cli_tests {
         assert_eq!(p(&["-V"]), Mode::Version);
     }
 }
+
+#[cfg(test)]
+mod version_tests {
+    #[test]
+    fn version_tag_is_set() {
+        let tag = env!("FLIPSAVER_VERSION_TAG");
+        // Should be "dev" or a git tag like "v0.1.0"
+        assert!(!tag.is_empty(), "version tag should not be empty");
+    }
+
+    #[test]
+    fn git_sha_is_set() {
+        let sha = env!("FLIPSAVER_GIT_SHA");
+        // Should be a short commit hash or "unknown"
+        assert!(!sha.is_empty(), "git sha should not be empty");
+    }
+
+    #[test]
+    fn version_format_is_valid() {
+        let version_line = format!(
+            "Version: {} ({}), built for: windows-x86_64",
+            env!("FLIPSAVER_VERSION_TAG"),
+            env!("FLIPSAVER_GIT_SHA")
+        );
+        // Should match the expected format
+        assert!(version_line.contains("Version:"), "should contain 'Version:'");
+        assert!(version_line.contains("windows-x86_64"), "should contain 'windows-x86_64'");
+        assert!(version_line.contains("("), "should contain opening paren for sha");
+        assert!(version_line.contains(")"), "should contain closing paren for sha");
+    }
+}

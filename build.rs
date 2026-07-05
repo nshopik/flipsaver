@@ -19,11 +19,16 @@ fn main() {
     println!("cargo:rerun-if-changed=.git/refs");
 
     // Manifest (PMv2 DPI awareness + comctl32 v6 for the dialog) via a
-    // linker resource. CARGO_CFG_WINDOWS identifies the target platform;
-    // SetProcessDpiAwarenessContext at startup is the functional backstop
-    // if this ever fights cargo-xwin.
-    if std::env::var("CARGO_CFG_WINDOWS").is_ok() {
-        embed_manifest::embed_manifest(embed_manifest::new_manifest("flipsaver"))
-            .expect("embed manifest");
+    // linker resource. Requires:
+    // - CARGO_CFG_WINDOWS: target platform is Windows (for /MANIFEST:EMBED)
+    // - Host OS is Windows: mt.exe (manifest tool) only available on Windows
+    // When cross-compiling (e.g., Linux → Windows via cargo-xwin), mt.exe
+    // is unavailable, so embedding fails. In that case,
+    // SetProcessDpiAwarenessContext at startup is the functional backstop.
+    if std::env::var("CARGO_CFG_WINDOWS").is_ok() && std::env::consts::OS == "windows" {
+        if let Err(e) = embed_manifest::embed_manifest(embed_manifest::new_manifest("flipsaver"))
+        {
+            eprintln!("Warning: failed to embed manifest: {e}");
+        }
     }
 }
