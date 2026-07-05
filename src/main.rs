@@ -3,6 +3,9 @@
 mod clock;
 mod settings;
 
+#[cfg(windows)]
+mod screensaver;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Mode {
     Screensaver,
@@ -37,7 +40,34 @@ pub fn parse_args(args: &[String]) -> Mode {
     }
 }
 
-fn main() {}
+#[cfg(windows)]
+fn main() {
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::HiDpi::{
+        SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
+    unsafe {
+        // Functional backstop for the manifest (Task 12); must run before
+        // any window is created.
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        // No CoUninitialize: the process exits right after the loop.
+    }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let settings = settings::load(&settings::default_path());
+    match parse_args(&args) {
+        Mode::Screensaver => screensaver::run_fullscreen(settings),
+        Mode::Preview(Some(_parent)) => {} // wired in Task 10
+        Mode::Preview(None) => {}          // declared deviation: exit 0 silently
+        Mode::Config => {}                 // wired in Task 11
+        Mode::Version => {}                // wired in Task 12
+    }
+}
+
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("flipsaver targets Windows; this host build exists for `cargo test` only.");
+}
 
 #[cfg(test)]
 mod cli_tests {
