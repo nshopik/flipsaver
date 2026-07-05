@@ -7,6 +7,9 @@ mod settings;
 mod screensaver;
 
 #[cfg(windows)]
+mod config;
+
+#[cfg(windows)]
 pub mod perf {
     use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
     use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
@@ -104,7 +107,7 @@ fn main() {
         Mode::Screensaver => screensaver::run_fullscreen(settings),
         Mode::Preview(Some(parent)) => screensaver::run_preview(settings, parent),
         Mode::Preview(None) => {}          // declared deviation: exit 0 silently
-        Mode::Config => {}                 // wired in Task 11
+        Mode::Config => config::run_config(),
         Mode::Version => {}                // wired in Task 12
     }
 }
