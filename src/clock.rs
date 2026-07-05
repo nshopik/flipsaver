@@ -107,6 +107,198 @@ pub fn format_time(hour: u32, minute: u32, is_24h: bool) -> (String, String, Opt
     }
 }
 
+#[cfg(windows)]
+pub mod draw {
+    use super::{compute, format_time, BoxLayout, Layout, Marker, Rect};
+    use crate::screensaver::Gfx;
+    use crate::settings::Settings;
+    use windows::core::*;
+    use windows::Win32::Graphics::Direct2D::Common::*;
+    use windows::Win32::Graphics::Direct2D::*;
+    use windows::Win32::Graphics::DirectWrite::*;
+
+    fn color(rgb: u32) -> D2D1_COLOR_F {
+        D2D1_COLOR_F {
+            r: ((rgb >> 16) & 0xFF) as f32 / 255.0,
+            g: ((rgb >> 8) & 0xFF) as f32 / 255.0,
+            b: (rgb & 0xFF) as f32 / 255.0,
+            a: 1.0,
+        }
+    }
+
+    fn rectf(r: Rect) -> D2D_RECT_F {
+        D2D_RECT_F {
+            left: r.x as f32,
+            top: r.y as f32,
+            right: (r.x + r.w) as f32,
+            bottom: (r.y + r.h) as f32,
+        }
+    }
+
+    pub struct FaceCache {
+        pub layout: Layout,
+        pub is_24h: bool,
+        digits: ID2D1SolidColorBrush,
+        black: ID2D1SolidColorBrush,
+        gradient: ID2D1GradientStopCollection,
+        large_format: IDWriteTextFormat,
+        small_format: IDWriteTextFormat,
+        dwrite: IDWriteFactory5,
+    }
+
+    impl FaceCache {
+        pub fn new(
+            rt: &ID2D1HwndRenderTarget,
+            gfx: &Gfx,
+            width: i32,
+            height: i32,
+            settings: Settings,
+            is_preview: bool,
+        ) -> Result<FaceCache> {
+            unsafe {
+                let layout =
+                    compute(width, height, settings.scale, settings.display_24hr, is_preview);
+                let digits = rt.CreateSolidColorBrush(&color(0xB7B7B7), None)?;
+                let black = rt.CreateSolidColorBrush(&color(0x000000), None)?;
+                let stops = [
+                    D2D1_GRADIENT_STOP { position: 0.0, color: color(0x121212) },
+                    D2D1_GRADIENT_STOP { position: 1.0, color: color(0x0A0A0A) },
+                ];
+                let gradient = rt.CreateGradientStopCollection(
+                    &stops,
+                    D2D1_GAMMA_2_2,
+                    D2D1_EXTEND_MODE_CLAMP,
+                )?;
+                let mk_format = |px: i32| -> Result<IDWriteTextFormat> {
+                    let f = gfx.dwrite.CreateTextFormat(
+                        &HSTRING::from(gfx.family),
+                        gfx.fonts.as_ref().map(|c| c.cast::<IDWriteFontCollection>()).transpose()?.as_ref(),
+                        DWRITE_FONT_WEIGHT_BOLD,
+                        DWRITE_FONT_STYLE_NORMAL,
+                        DWRITE_FONT_STRETCH_NORMAL,
+                        px as f32,
+                        w!("en-us"),
+                    )?;
+                    Ok(f)
+                };
+                let large_format = mk_format(layout.large_font_px)?;
+                // Digits center in the (already offset) text rect, matching
+                // the original's StringFormat Center/Center.
+                large_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+                large_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+                let small_format = mk_format(layout.small_font_px)?;
+                Ok(FaceCache {
+                    layout,
+                    is_24h: settings.display_24hr,
+                    digits,
+                    black,
+                    gradient,
+                    large_format,
+                    small_format,
+                    dwrite: gfx.dwrite.clone(),
+                })
+            }
+        }
+
+        unsafe fn draw_box(
+            &self,
+            rt: &ID2D1HwndRenderTarget,
+            bl: &BoxLayout,
+            text: &str,
+            marker: Option<Marker>,
+        ) -> Result<()> {
+            let r = rectf(bl.rect);
+            // Vertical gradient per box (original: LinearGradientMode.Vertical).
+            let brush = rt.CreateLinearGradientBrush(
+                &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                    startPoint: windows_numerics::Vector2 { X: r.left, Y: r.top },
+                    endPoint: windows_numerics::Vector2 { X: r.left, Y: r.bottom },
+                },
+                None,
+                &self.gradient,
+            )?;
+            let rounded = D2D1_ROUNDED_RECT {
+                rect: r,
+                radiusX: self.layout.corner_radius as f32,
+                radiusY: self.layout.corner_radius as f32,
+            };
+            rt.FillRoundedRectangle(&rounded, &brush);
+
+            let wide: Vec<u16> = text.encode_utf16().collect();
+            let tl = self.dwrite.CreateTextLayout(
+                &wide,
+                &self.large_format,
+                bl.text.w as f32,
+                bl.text.h as f32,
+            )?;
+            rt.DrawTextLayout(
+                windows_numerics::Vector2 { X: bl.text.x as f32, Y: bl.text.y as f32 },
+                &tl,
+                &self.digits,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+            );
+
+            if let Some(m) = marker {
+                let s: Vec<u16> = (if m == Marker::Am { "AM" } else { "PM" }).encode_utf16().collect();
+                let ml = self.dwrite.CreateTextLayout(&s, &self.small_format, 4096.0, 4096.0)?;
+                match m {
+                    Marker::Am => {
+                        let (x, y) = bl.marker_top.unwrap();
+                        rt.DrawTextLayout(
+                            windows_numerics::Vector2 { X: x as f32, Y: y as f32 },
+                            &ml,
+                            &self.digits,
+                            D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        );
+                    }
+                    Marker::Pm => {
+                        // Anchor is the text bottom edge (original subtracts
+                        // Font.Height); use the measured line height.
+                        let mut metrics = DWRITE_TEXT_METRICS::default();
+                        ml.GetMetrics(&mut metrics)?;
+                        let (x, y_bottom) = bl.marker_bottom.unwrap();
+                        rt.DrawTextLayout(
+                            windows_numerics::Vector2 {
+                                X: x as f32,
+                                Y: y_bottom as f32 - metrics.height,
+                            },
+                            &ml,
+                            &self.digits,
+                            D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        );
+                    }
+                }
+            }
+
+            // Split line per box, never spanning the face.
+            rt.DrawLine(
+                windows_numerics::Vector2 { X: r.left, Y: bl.split_y as f32 },
+                windows_numerics::Vector2 { X: r.right, Y: bl.split_y as f32 },
+                &self.black,
+                self.layout.split_stroke,
+                None,
+            );
+            Ok(())
+        }
+    }
+
+    pub fn draw_face(
+        rt: &ID2D1HwndRenderTarget,
+        cache: &FaceCache,
+        hour: u32,
+        minute: u32,
+    ) -> Result<()> {
+        unsafe {
+            rt.Clear(Some(&color(0x000000)));
+            let (h, m, marker) = format_time(hour, minute, cache.is_24h);
+            // One marker only: AM top corner before noon, PM bottom after.
+            cache.draw_box(rt, &cache.layout.hours, &h, marker)?;
+            cache.draw_box(rt, &cache.layout.minutes, &m, None)?;
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

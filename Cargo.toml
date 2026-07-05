@@ -22,6 +22,7 @@ windows = { version = "0.61", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_Controls",
 ] }
+windows-numerics = "0.2"
 
 # panic="abort" is release-only: dev/test profiles keep unwinding so
 # `cargo test` on the Linux host works.

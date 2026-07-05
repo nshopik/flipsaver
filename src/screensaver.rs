@@ -66,6 +66,15 @@ pub struct WindowState {
     pub settings: Settings,
     pub gfx: std::rc::Rc<Gfx>,
     pub target: Option<ID2D1HwndRenderTarget>,
+    pub face: Option<crate::clock::draw::FaceCache>,
+    pub last_minute: u32,
+}
+
+/// Current local hour/minute, used both to paint and to decide whether a
+/// WM_TIMER tick needs a repaint.
+fn local_hm() -> (u32, u32) {
+    let st = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    (st.wHour as u32, st.wMinute as u32)
 }
 
 unsafe fn ensure_target(hwnd: HWND, state: &mut WindowState) -> Option<ID2D1HwndRenderTarget> {
@@ -137,7 +146,7 @@ pub unsafe fn create_saver_window(
     state: WindowState,
 ) -> HWND {
     let boxed = Box::into_raw(Box::new(state));
-    CreateWindowExW(
+    let hwnd = CreateWindowExW(
         ex_style,
         CLASS_NAME,
         w!("flipsaver"),
@@ -151,7 +160,12 @@ pub unsafe fn create_saver_window(
         Some(instance),
         Some(boxed as *const core::ffi::c_void),
     )
-    .unwrap_or_default()
+    .unwrap_or_default();
+    if hwnd.0 != std::ptr::null_mut() {
+        // 1000 ms in both modes: the preview minute must also tick live.
+        SetTimer(Some(hwnd), 1, 1000, None);
+    }
+    hwnd
 }
 
 unsafe fn state_of(hwnd: HWND) -> *mut WindowState {
@@ -205,13 +219,45 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             let mut ps = PAINTSTRUCT::default();
             let _ = BeginPaint(hwnd, &mut ps);
             if let Some(rt) = ensure_target(hwnd, state) {
+                if state.face.is_none() {
+                    let mut rc = RECT::default();
+                    let _ = GetClientRect(hwnd, &mut rc);
+                    state.face = crate::clock::draw::FaceCache::new(
+                        &rt,
+                        &state.gfx,
+                        rc.right - rc.left,
+                        rc.bottom - rc.top,
+                        state.settings,
+                        state.is_preview,
+                    )
+                    .ok();
+                }
                 rt.BeginDraw();
-                rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
+                let draw_ok = match &state.face {
+                    Some(face) => {
+                        let (h, m) = local_hm();
+                        state.last_minute = m;
+                        crate::clock::draw::draw_face(&rt, face, h, m).is_ok()
+                    }
+                    None => {
+                        rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
+                        true
+                    }
+                };
+                let _ = draw_ok;
                 let end = rt.EndDraw(None, None);
                 crate::perf::log_first_frame();
                 let _ = end; // recreate-on-loss handled in Task 9
             }
             let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            // Redraw only when the minute changes (no seconds in v0.1).
+            let (_, m) = local_hm();
+            if m != state.last_minute {
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            }
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
@@ -239,6 +285,9 @@ pub fn run_fullscreen(settings: Settings) {
                     settings: settings.clone(),
                     gfx: gfx.clone(),
                     target: None,
+                    face: None,
+                    // Impossible minute so the first paint always draws.
+                    last_minute: 61,
                 },
             );
         }
