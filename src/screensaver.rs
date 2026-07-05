@@ -245,11 +245,29 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                     }
                 };
                 let _ = draw_ok;
-                let end = rt.EndDraw(None, None);
+                if let Err(e) = rt.EndDraw(None, None) {
+                    if e.code() == D2DERR_RECREATE_TARGET {
+                        // Device lost (driver reset, remote session, ...):
+                        // this window rebuilds its own target and
+                        // device-dependent resources; others are untouched.
+                        state.target = None;
+                        state.face = None;
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                }
                 crate::perf::log_first_frame();
-                let _ = end; // recreate-on-loss handled in Task 9
             }
             let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        }
+        WM_DPICHANGED => {
+            // Layout is derived from physical pixel geometry; a DPI change
+            // can change that geometry, so drop this window's caches and
+            // repaint. Mixed-DPI is otherwise handled by per-monitor-V2
+            // physical sizing (target stays at 96 DPI, see ensure_target).
+            state.target = None;
+            state.face = None;
+            let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }
         WM_TIMER => {
