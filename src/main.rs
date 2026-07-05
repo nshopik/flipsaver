@@ -1,5 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod clock;
 mod settings;
 
 #[derive(Debug, PartialEq, Eq)]
