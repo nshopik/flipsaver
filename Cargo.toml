@@ -26,6 +26,9 @@ windows-numerics = "0.2"
 
 # panic="abort" is release-only: dev/test profiles keep unwinding so
 # `cargo test` on the Linux host works.
+[build-dependencies]
+embed-manifest = "1.4"
+
 [profile.release]
 opt-level = "s"
 lto = true

@@ -88,6 +88,21 @@ pub fn parse_args(args: &[String]) -> Mode {
 }
 
 #[cfg(windows)]
+fn print_version() {
+    use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+    // GUI-subsystem binary: borrow the parent console so the line is
+    // visible when run from a terminal.
+    unsafe {
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+    println!(
+        "Version: {} ({}), built for: windows-x86_64",
+        env!("FLIPSAVER_VERSION_TAG"),
+        env!("FLIPSAVER_GIT_SHA")
+    );
+}
+
+#[cfg(windows)]
 fn main() {
     perf::mark_start();
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -108,7 +123,7 @@ fn main() {
         Mode::Preview(Some(parent)) => screensaver::run_preview(settings, parent),
         Mode::Preview(None) => {}          // declared deviation: exit 0 silently
         Mode::Config => config::run_config(),
-        Mode::Version => {}                // wired in Task 12
+        Mode::Version => print_version(),
     }
 }
 
