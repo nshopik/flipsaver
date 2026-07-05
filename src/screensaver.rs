@@ -210,8 +210,12 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             LRESULT(0)
         }
         WM_DESTROY => {
+            let was_preview = state.is_preview;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             drop(Box::from_raw(state_ptr));
+            if was_preview {
+                PostQuitMessage(0);
+            }
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1), // D2D owns the surface; avoid GDI flicker
@@ -309,6 +313,50 @@ pub fn run_fullscreen(settings: Settings) {
                 },
             );
         }
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+}
+
+pub fn run_preview(settings: Settings, parent: isize) {
+    unsafe {
+        let parent = HWND(parent as *mut core::ffi::c_void);
+        // Declared deviation: bogus hwnd exits 0 silently, no error UI.
+        if !IsWindow(Some(parent)).as_bool() {
+            return;
+        }
+        let mut rc = RECT::default();
+        if GetClientRect(parent, &mut rc).is_err() {
+            return;
+        }
+        let instance: HINSTANCE = GetModuleHandleW(None).unwrap_or_default().into();
+        register_class(instance);
+        let gfx = match Gfx::new() {
+            Ok(g) => std::rc::Rc::new(g),
+            Err(_) => return,
+        };
+        // Same draw path as /s, including the 1 s timer, so the preview
+        // minute stays live. Input-exit is disabled via is_preview; the
+        // control panel terminates the process by destroying the parent.
+        create_saver_window(
+            instance,
+            WS_CHILD,
+            WINDOW_EX_STYLE::default(),
+            Some(parent),
+            rc,
+            WindowState {
+                is_preview: true,
+                mouse: None,
+                settings,
+                gfx,
+                target: None,
+                face: None,
+                last_minute: 61,
+            },
+        );
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);

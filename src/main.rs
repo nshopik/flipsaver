@@ -102,7 +102,7 @@ fn main() {
     let settings = settings::load(&settings::default_path());
     match parse_args(&args) {
         Mode::Screensaver => screensaver::run_fullscreen(settings),
-        Mode::Preview(Some(_parent)) => {} // wired in Task 10
+        Mode::Preview(Some(parent)) => screensaver::run_preview(settings, parent),
         Mode::Preview(None) => {}          // declared deviation: exit 0 silently
         Mode::Config => {}                 // wired in Task 11
         Mode::Version => {}                // wired in Task 12
