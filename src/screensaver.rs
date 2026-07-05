@@ -4,16 +4,65 @@
 use crate::settings::Settings;
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS_NAME: PCWSTR = w!("flipsaverwnd");
 
+static OSWALD_BOLD: &[u8] = include_bytes!("../assets/Oswald-Bold.ttf");
+
+/// Process-wide device-independent graphics resources, shared by every
+/// window (fullscreen and preview) via Rc.
+pub struct Gfx {
+    pub d2d: ID2D1Factory,
+    pub dwrite: IDWriteFactory5,
+    pub fonts: Option<IDWriteFontCollection1>,
+    pub family: &'static str,
+}
+
+impl Gfx {
+    pub fn new() -> Result<Gfx> {
+        unsafe {
+            let d2d: ID2D1Factory =
+                D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+            let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+            match Self::load_embedded_font(&dwrite) {
+                Ok(fonts) => Ok(Gfx { d2d, dwrite, fonts: Some(fonts), family: "Oswald" }),
+                Err(e) => {
+                    // Embedded bytes failing to load is a build defect, not
+                    // a runtime condition: assert in debug, degrade in release.
+                    debug_assert!(false, "embedded font load failed: {e:?}");
+                    Ok(Gfx { d2d, dwrite, fonts: None, family: "Segoe UI" })
+                }
+            }
+        }
+    }
+
+    /// Requires IDWriteFactory5 (Windows 10 1703+), which is the platform floor.
+    unsafe fn load_embedded_font(dwrite: &IDWriteFactory5) -> Result<IDWriteFontCollection1> {
+        let loader = dwrite.CreateInMemoryFontFileLoader()?;
+        dwrite.RegisterFontFileLoader(&loader.cast::<IDWriteFontFileLoader>()?)?;
+        let file = loader.CreateInMemoryFontFileReference(
+            dwrite,
+            OSWALD_BOLD.as_ptr() as *const core::ffi::c_void,
+            OSWALD_BOLD.len() as u32,
+            None,
+        )?;
+        let builder = dwrite.CreateFontSetBuilder()?;
+        builder.AddFontFile(&file)?;
+        let set = builder.CreateFontSet()?;
+        dwrite.CreateFontCollectionFromFontSet(&set)
+    }
+}
+
 pub struct WindowState {
     pub is_preview: bool,
     pub mouse: Option<(i32, i32)>,
     pub settings: Settings,
+    pub gfx: std::rc::Rc<Gfx>,
 }
 
 fn enumerate_monitors() -> Vec<RECT> {
@@ -123,6 +172,10 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
 }
 
 pub fn run_fullscreen(settings: Settings) {
+    let gfx = match Gfx::new() {
+        Ok(g) => std::rc::Rc::new(g),
+        Err(_) => return, // no D2D at all: nothing sane to render, exit quietly
+    };
     unsafe {
         let instance: HINSTANCE = GetModuleHandleW(None).unwrap_or_default().into();
         register_class(instance);
@@ -133,7 +186,12 @@ pub fn run_fullscreen(settings: Settings) {
                 WS_EX_TOPMOST,
                 None,
                 bounds,
-                WindowState { is_preview: false, mouse: None, settings },
+                WindowState {
+                    is_preview: false,
+                    mouse: None,
+                    settings: settings.clone(),
+                    gfx: gfx.clone(),
+                },
             );
         }
         let mut msg = MSG::default();
