@@ -4,7 +4,9 @@
 use crate::settings::Settings;
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -63,6 +65,37 @@ pub struct WindowState {
     pub mouse: Option<(i32, i32)>,
     pub settings: Settings,
     pub gfx: std::rc::Rc<Gfx>,
+    pub target: Option<ID2D1HwndRenderTarget>,
+}
+
+unsafe fn ensure_target(hwnd: HWND, state: &mut WindowState) -> Option<ID2D1HwndRenderTarget> {
+    if state.target.is_none() {
+        let mut rc = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rc);
+        // Target stays at 96 DPI so 1 DIP == 1 physical pixel: with
+        // per-monitor-V2 the window is sized in physical pixels and all
+        // layout math is pixel-based, so per-monitor DPI is honored
+        // through geometry, not through D2D unit scaling.
+        let props = D2D1_RENDER_TARGET_PROPERTIES {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_IGNORE,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            ..Default::default()
+        };
+        let hwnd_props = D2D1_HWND_RENDER_TARGET_PROPERTIES {
+            hwnd,
+            pixelSize: D2D_SIZE_U {
+                width: (rc.right - rc.left) as u32,
+                height: (rc.bottom - rc.top) as u32,
+            },
+            presentOptions: D2D1_PRESENT_OPTIONS_NONE,
+        };
+        state.target = state.gfx.d2d.CreateHwndRenderTarget(&props, &hwnd_props).ok();
+    }
+    state.target.clone()
 }
 
 fn enumerate_monitors() -> Vec<RECT> {
@@ -88,7 +121,7 @@ unsafe fn register_class(instance: HINSTANCE) {
         style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(wndproc),
         hInstance: instance,
-        hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+        hbrBackground: HBRUSH::default(),
         lpszClassName: CLASS_NAME,
         ..Default::default()
     };
@@ -167,6 +200,20 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             drop(Box::from_raw(state_ptr));
             LRESULT(0)
         }
+        WM_ERASEBKGND => LRESULT(1), // D2D owns the surface; avoid GDI flicker
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let _ = BeginPaint(hwnd, &mut ps);
+            if let Some(rt) = ensure_target(hwnd, state) {
+                rt.BeginDraw();
+                rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
+                let end = rt.EndDraw(None, None);
+                crate::perf::log_first_frame();
+                let _ = end; // recreate-on-loss handled in Task 9
+            }
+            let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
 }
@@ -191,6 +238,7 @@ pub fn run_fullscreen(settings: Settings) {
                     mouse: None,
                     settings: settings.clone(),
                     gfx: gfx.clone(),
+                    target: None,
                 },
             );
         }

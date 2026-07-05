@@ -6,6 +6,50 @@ mod settings;
 #[cfg(windows)]
 mod screensaver;
 
+#[cfg(windows)]
+pub mod perf {
+    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+    use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+
+    static START: AtomicI64 = AtomicI64::new(0);
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+
+    pub fn mark_start() {
+        let mut t = 0i64;
+        unsafe {
+            let _ = QueryPerformanceCounter(&mut t);
+        }
+        START.store(t, Ordering::Relaxed);
+    }
+
+    /// Called after every EndDraw; only the first call logs.
+    pub fn log_first_frame() {
+        if LOGGED.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let (mut now, mut freq) = (0i64, 0i64);
+        unsafe {
+            let _ = QueryPerformanceCounter(&mut now);
+            let _ = QueryPerformanceFrequency(&mut freq);
+        }
+        let ms = (now - START.load(Ordering::Relaxed)) as f64 * 1000.0 / freq as f64;
+        let line = format!("flipsaver: first frame in {ms:.1} ms");
+        let wide: Vec<u16> = line.encode_utf16().chain([0]).collect();
+        unsafe {
+            windows::Win32::System::Diagnostics::Debug::OutputDebugStringW(
+                windows::core::PCWSTR(wide.as_ptr()),
+            );
+        }
+        // FLIPSAVER_LOG holds a file path; append so repeated runs accumulate.
+        if let Ok(path) = std::env::var("FLIPSAVER_LOG") {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(f, "{line}");
+            }
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Mode {
     Screensaver,
@@ -42,6 +86,7 @@ pub fn parse_args(args: &[String]) -> Mode {
 
 #[cfg(windows)]
 fn main() {
+    perf::mark_start();
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::HiDpi::{
         SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
