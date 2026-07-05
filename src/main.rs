@@ -1,5 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod settings;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Mode {
     Screensaver,
