@@ -142,7 +142,8 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 pub fn run_config() {
     unsafe {
         // Trackbar class lives in comctl32; v6 activation comes from the
-        // embedded manifest (Task 12).
+        // embedded manifest (if available). On cross-compiled builds without manifest
+        // embedding, this dialog will lack v6 visual theming but remain functional.
         let icc = INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
             dwICC: ICC_BAR_CLASSES,
