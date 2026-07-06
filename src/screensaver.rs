@@ -54,13 +54,36 @@ impl Gfx {
         // No downloadable fonts: only locally installed families count.
         if dwrite.GetSystemFontCollection(false, &mut sys, false).is_ok() {
             if let Some(sys) = sys {
-                let installed = |family: &str| {
-                    let name = HSTRING::from(family);
+                let usable = |c: &crate::fontsel::Candidate| {
+                    let name = HSTRING::from(c.family);
                     let (mut index, mut exists) = (0u32, BOOL::default());
-                    sys.FindFamilyName(&name, &mut index, &mut exists).is_ok()
-                        && exists.as_bool()
+                    if sys.FindFamilyName(&name, &mut index, &mut exists).is_err()
+                        || !exists.as_bool()
+                    {
+                        return false;
+                    }
+                    // Family name existing is not enough: with only the
+                    // regular cut installed, DirectWrite silently maps a
+                    // Bold request to it and renders visibly thinner than
+                    // FlipIt. Demand the genuine bold condensed face.
+                    let request = if c.condensed {
+                        DWRITE_FONT_STRETCH_CONDENSED
+                    } else {
+                        DWRITE_FONT_STRETCH_NORMAL
+                    };
+                    (|| -> Result<bool> {
+                        let fam = sys.GetFontFamily(index)?;
+                        let font = fam.GetFirstMatchingFont(
+                            DWRITE_FONT_WEIGHT_BOLD,
+                            request,
+                            DWRITE_FONT_STYLE_NORMAL,
+                        )?;
+                        Ok(font.GetWeight() == DWRITE_FONT_WEIGHT_BOLD
+                            && font.GetStretch() == DWRITE_FONT_STRETCH_CONDENSED)
+                    })()
+                    .unwrap_or(false)
                 };
-                if let Some(c) = crate::fontsel::pick(installed) {
+                if let Some(c) = crate::fontsel::pick(usable) {
                     let stretch = if c.condensed {
                         DWRITE_FONT_STRETCH_CONDENSED
                     } else {
