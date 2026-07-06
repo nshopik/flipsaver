@@ -33,12 +33,18 @@ impl Orientation {
 pub struct Settings {
     pub display_24hr: bool,
     pub scale: i32, // 0..=100, slider value x 10
+    pub flip_animation: bool,
     pub screens: BTreeMap<String, Orientation>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { display_24hr: false, scale: DEFAULT_SCALE, screens: BTreeMap::new() }
+        Settings {
+            display_24hr: false,
+            scale: DEFAULT_SCALE,
+            flip_animation: true,
+            screens: BTreeMap::new(),
+        }
     }
 }
 
@@ -67,6 +73,12 @@ impl Settings {
                         s.display_24hr = value.trim().parse::<i32>().map(|v| v == 1).unwrap_or(false)
                     }
                     "Scale" => s.scale = value.trim().parse().unwrap_or(DEFAULT_SCALE),
+                    // Default on; only an explicit 0 disables. Unparseable
+                    // (and absent) stays on so pre-existing INIs animate.
+                    "FlipAnimation" => {
+                        s.flip_animation =
+                            value.trim().parse::<i32>().map(|v| v != 0).unwrap_or(true)
+                    }
                     _ => {}
                 }
             } else if let Some(name) = section.strip_prefix("Screen ") {
@@ -81,9 +93,10 @@ impl Settings {
 
     pub fn to_ini_text(&self) -> String {
         let mut out = format!(
-            "[General]\r\nDisplay24Hr={}\r\nScale={}\r\n\r\n",
+            "[General]\r\nDisplay24Hr={}\r\nScale={}\r\nFlipAnimation={}\r\n\r\n",
             if self.display_24hr { 1 } else { 0 },
-            self.scale
+            self.scale,
+            if self.flip_animation { 1 } else { 0 },
         );
         for (name, orient) in &self.screens {
             if *orient == Orientation::Auto {
@@ -141,6 +154,29 @@ mod tests {
     }
 
     #[test]
+    fn flip_animation_defaults_on() {
+        assert!(Settings::default().flip_animation);
+        // absent key -> on
+        assert!(Settings::from_ini_text("[General]\nScale=70\n").flip_animation);
+        // garbage -> on
+        assert!(Settings::from_ini_text("[General]\nFlipAnimation=yes\n").flip_animation);
+    }
+
+    #[test]
+    fn flip_animation_explicit_zero_disables() {
+        assert!(!Settings::from_ini_text("[General]\nFlipAnimation=0\n").flip_animation);
+        assert!(Settings::from_ini_text("[General]\nFlipAnimation=1\n").flip_animation);
+    }
+
+    #[test]
+    fn flip_animation_round_trips() {
+        let mut s = Settings::default();
+        s.flip_animation = false;
+        assert!(!Settings::from_ini_text(&s.to_ini_text()).flip_animation);
+        assert!(s.to_ini_text().contains("FlipAnimation=0"));
+    }
+
+    #[test]
     fn parses_both_keys() {
         let s = Settings::from_ini_text("[General]\r\nDisplay24Hr=1\r\nScale=40\r\n");
         assert!(s.display_24hr);
@@ -177,6 +213,7 @@ mod tests {
         let s = Settings {
             display_24hr: true,
             scale: 90,
+            flip_animation: true,
             screens: std::collections::BTreeMap::new(),
         };
         assert_eq!(Settings::from_ini_text(&s.to_ini_text()), s);
@@ -197,6 +234,7 @@ mod tests {
         let s = Settings {
             display_24hr: true,
             scale: 20,
+            flip_animation: true,
             screens: std::collections::BTreeMap::new(),
         };
         save(&path, &s).unwrap();
@@ -235,6 +273,7 @@ mod tests {
         let mut s = Settings {
             display_24hr: true,
             scale: 40,
+            flip_animation: true,
             screens: std::collections::BTreeMap::new(),
         };
         s.screens.insert("DISPLAY1".into(), Orientation::Horizontal);
