@@ -9,6 +9,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 const IDC_12H: i32 = 101;
 const IDC_24H: i32 = 102;
 const IDC_SCALE: i32 = 103;
+const IDC_FLIP: i32 = 104;
 
 // Missing from the windows crate's Controls bindings; TBM_GETPOS = WM_USER.
 const TBM_GETPOS: u32 = 1024;
@@ -101,8 +102,8 @@ impl DlgBuilder {
 fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
     let row_h: i16 = 14;
     let rows = monitors.len();
-    let item_count = (9 + rows * 4) as u16;
-    let cy = 92 + rows as i16 * row_h;
+    let item_count = (10 + rows * 4) as u16;
+    let cy = 108 + rows as i16 * row_h;
     let mut b = DlgBuilder::new("FlipSaver Settings", 260, cy, item_count);
     b.item_atom(0, 7, 9, 45, 8, 0, 0x0082, "Time format:"); // STATIC
     b.item_atom(
@@ -117,12 +118,16 @@ fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
     );
     b.item_atom(0, 7, 52, 45, 8, 0, 0x0082, "Font:");
     b.item_atom(0, 60, 52, 108, 8, 0, 0x0082, font_name);
+    b.item_atom(
+        BS_AUTOCHECKBOX as u32 | WS_TABSTOP.0 | WS_GROUP.0,
+        7, 66, 120, 10, IDC_FLIP as u16, 0x0080, "Flip animation",
+    );
 
     // One row per monitor: label + Auto/Horizontal/Vertical radios. Each
     // row's first radio carries WS_GROUP so the rows are independent radio
     // groups; the OK button's WS_GROUP closes the last row.
     for (row, (rect, _device)) in monitors.iter().enumerate() {
-        let y = 64 + row as i16 * row_h;
+        let y = 80 + row as i16 * row_h;
         let base = 200 + row as u16 * 4;
         let w = rect.right - rect.left;
         let h = rect.bottom - rect.top;
@@ -136,7 +141,7 @@ fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
         b.item_atom(BS_AUTORADIOBUTTON as u32, 205, y, 45, 10, base + 2, 0x0080, "Vertical");
     }
 
-    let by = 71 + rows as i16 * row_h;
+    let by = 87 + rows as i16 * row_h;
     b.item_atom(
         BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0 | WS_GROUP.0,
         63, by, 50, 14, IDOK.0 as u16, 0x0080, "OK",
@@ -159,6 +164,11 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             // Slider is 0..10; INI stores slider x 10 (0..100), like FlipIt.
             let _ = SendDlgItemMessageW(hwnd, IDC_SCALE, TBM_SETRANGE, WPARAM(1), LPARAM(10 << 16));
             let _ = SendDlgItemMessageW(hwnd, IDC_SCALE, TBM_SETPOS, WPARAM(1), LPARAM((settings.scale / 10) as isize));
+            let _ = CheckDlgButton(
+                hwnd,
+                IDC_FLIP,
+                if settings.flip_animation { BST_CHECKED } else { BST_UNCHECKED },
+            );
             for (row, (_rect, device)) in monitors.iter().enumerate() {
                 let base = 200 + row as i32 * 4;
                 let orient = settings.screens.get(device).copied().unwrap_or(Orientation::Auto);
@@ -177,6 +187,7 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let pos = SendDlgItemMessageW(hwnd, IDC_SCALE, TBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
                 ctx.0.display_24hr = IsDlgButtonChecked(hwnd, IDC_24H) == 1;
                 ctx.0.scale = pos * 10;
+                ctx.0.flip_animation = IsDlgButtonChecked(hwnd, IDC_FLIP) == 1;
                 // Only present monitors are touched; absent sections in the
                 // map are left as-is and preserved on save.
                 for (row, (_rect, device)) in ctx.1.iter().enumerate() {
