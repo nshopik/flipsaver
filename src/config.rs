@@ -87,8 +87,8 @@ impl DlgBuilder {
     }
 }
 
-fn build_template() -> Vec<u16> {
-    let mut b = DlgBuilder::new("FlipSaver Settings", 175, 92, 7);
+fn build_template(font_name: &str) -> Vec<u16> {
+    let mut b = DlgBuilder::new("FlipSaver Settings", 175, 92, 9);
     b.item_atom(0, 7, 9, 45, 8, 0, 0x0082, "Time format:"); // STATIC
     b.item_atom(
         BS_AUTORADIOBUTTON as u32 | WS_TABSTOP.0 | WS_GROUP.0,
@@ -100,6 +100,8 @@ fn build_template() -> Vec<u16> {
         (TBS_AUTOTICKS | TBS_HORZ) as u32 | WS_TABSTOP.0 | WS_GROUP.0,
         58, 29, 110, 15, IDC_SCALE as u16, "msctls_trackbar32", "",
     );
+    b.item_atom(0, 7, 52, 45, 8, 0, 0x0082, "Font:");
+    b.item_atom(0, 60, 52, 108, 8, 0, 0x0082, font_name);
     b.item_atom(
         BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0 | WS_GROUP.0,
         63, 71, 50, 14, IDOK.0 as u16, 0x0080, "OK",
@@ -149,7 +151,7 @@ pub fn run_config() {
         };
         let _ = InitCommonControlsEx(&icc);
         let settings = settings::load(&settings::default_path());
-        let template = build_template();
+        let template = build_template(crate::screensaver::font_display_name());
         let instance: HINSTANCE = GetModuleHandleW(None).unwrap_or_default().into();
         let _ = DialogBoxIndirectParamW(
             Some(instance),

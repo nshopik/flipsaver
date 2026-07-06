@@ -171,11 +171,11 @@ pub mod draw {
                 )?;
                 let mk_format = |px: i32| -> Result<IDWriteTextFormat> {
                     let f = gfx.dwrite.CreateTextFormat(
-                        &HSTRING::from(gfx.family),
-                        gfx.fonts.as_ref().map(|c| c.cast::<IDWriteFontCollection>()).transpose()?.as_ref(),
+                        &HSTRING::from(gfx.font.family),
+                        gfx.font.collection.as_ref().map(|c| c.cast::<IDWriteFontCollection>()).transpose()?.as_ref(),
                         DWRITE_FONT_WEIGHT_BOLD,
                         DWRITE_FONT_STYLE_NORMAL,
-                        DWRITE_FONT_STRETCH_NORMAL,
+                        gfx.font.stretch,
                         px as f32,
                         w!("en-us"),
                     )?;

@@ -16,13 +16,22 @@ const CLASS_NAME: PCWSTR = w!("flipsaverwnd");
 
 static OSWALD_BOLD: &[u8] = include_bytes!("../assets/Oswald-Bold.ttf");
 
+/// Resolved font: system Helvetica LT Std Cond when installed, else the
+/// embedded Oswald collection. Weight is always Bold; stretch differs
+/// (the typographic "Helvetica LT Std" family needs Condensed).
+pub struct FontChoice {
+    /// None means system font collection (or last-resort Segoe UI).
+    pub collection: Option<IDWriteFontCollection1>,
+    pub family: &'static str,
+    pub stretch: DWRITE_FONT_STRETCH,
+}
+
 /// Process-wide device-independent graphics resources, shared by every
 /// window (fullscreen and preview) via Rc.
 pub struct Gfx {
     pub d2d: ID2D1Factory,
     pub dwrite: IDWriteFactory5,
-    pub fonts: Option<IDWriteFontCollection1>,
-    pub family: &'static str,
+    pub font: FontChoice,
 }
 
 impl Gfx {
@@ -31,13 +40,38 @@ impl Gfx {
             let d2d: ID2D1Factory =
                 D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            match Self::load_embedded_font(&dwrite) {
-                Ok(fonts) => Ok(Gfx { d2d, dwrite, fonts: Some(fonts), family: "Oswald" }),
-                Err(e) => {
-                    // Embedded bytes failing to load is a build defect, not
-                    // a runtime condition: assert in debug, degrade in release.
-                    debug_assert!(false, "embedded font load failed: {e:?}");
-                    Ok(Gfx { d2d, dwrite, fonts: None, family: "Segoe UI" })
+            let font = Self::pick_font(&dwrite);
+            debug_log(&format!("flipsaver: font: {}", font.family));
+            Ok(Gfx { d2d, dwrite, font })
+        }
+    }
+
+    /// Prefer the licensed Helvetica when installed on the system (probe by
+    /// family name only — the font itself never ships with the binary);
+    /// otherwise load the embedded Oswald.
+    unsafe fn pick_font(dwrite: &IDWriteFactory5) -> FontChoice {
+        if let Some(c) = probe_system_font(dwrite) {
+            let stretch = if c.condensed {
+                DWRITE_FONT_STRETCH_CONDENSED
+            } else {
+                DWRITE_FONT_STRETCH_NORMAL
+            };
+            return FontChoice { collection: None, family: c.family, stretch };
+        }
+        match Self::load_embedded_font(dwrite) {
+            Ok(fonts) => FontChoice {
+                collection: Some(fonts),
+                family: "Oswald",
+                stretch: DWRITE_FONT_STRETCH_NORMAL,
+            },
+            Err(e) => {
+                // Embedded bytes failing to load is a build defect, not
+                // a runtime condition: assert in debug, degrade in release.
+                debug_assert!(false, "embedded font load failed: {e:?}");
+                FontChoice {
+                    collection: None,
+                    family: "Segoe UI",
+                    stretch: DWRITE_FONT_STRETCH_NORMAL,
                 }
             }
         }
@@ -57,6 +91,38 @@ impl Gfx {
         builder.AddFontFile(&file)?;
         let set = builder.CreateFontSet()?;
         dwrite.CreateFontCollectionFromFontSet(&set)
+    }
+}
+
+/// First preferred family present in the system collection, by name only.
+unsafe fn probe_system_font(dwrite: &IDWriteFactory5) -> Option<&'static crate::fontsel::Candidate> {
+    let mut sys: Option<IDWriteFontCollection1> = None;
+    // No downloadable fonts: only locally installed families count.
+    dwrite.GetSystemFontCollection(false, &mut sys, false).ok()?;
+    let sys = sys?;
+    crate::fontsel::pick(|family| {
+        let name = HSTRING::from(family);
+        let (mut index, mut exists) = (0u32, BOOL::default());
+        sys.FindFamilyName(&name, &mut index, &mut exists).is_ok() && exists.as_bool()
+    })
+}
+
+/// Font the saver will render with, for display in the /c dialog.
+/// Same probe as Gfx::new, without loading the Oswald collection.
+pub fn font_display_name() -> &'static str {
+    unsafe {
+        let dwrite: Result<IDWriteFactory5> = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED);
+        match dwrite {
+            Ok(d) => probe_system_font(&d).map(|c| c.family).unwrap_or("Oswald (embedded)"),
+            Err(_) => "Oswald (embedded)",
+        }
+    }
+}
+
+fn debug_log(line: &str) {
+    let wide: Vec<u16> = line.encode_utf16().chain([0]).collect();
+    unsafe {
+        windows::Win32::System::Diagnostics::Debug::OutputDebugStringW(PCWSTR(wide.as_ptr()));
     }
 }
 
