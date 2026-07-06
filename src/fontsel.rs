@@ -18,11 +18,9 @@ pub const SYSTEM_CANDIDATES: [Candidate; 2] = [
     Candidate { family: "Helvetica LT Std", condensed: true },
 ];
 
-/// First usable candidate wins; None means fall back to embedded Oswald.
-/// The predicate must verify the bold condensed face is actually present,
-/// not just the family name (see screensaver::pick_font).
-pub fn pick(is_usable: impl Fn(&Candidate) -> bool) -> Option<&'static Candidate> {
-    SYSTEM_CANDIDATES.iter().find(|c| is_usable(c))
+/// First installed candidate wins; None means fall back to embedded Oswald.
+pub fn pick(is_installed: impl Fn(&str) -> bool) -> Option<&'static Candidate> {
+    SYSTEM_CANDIDATES.iter().find(|c| is_installed(c.family))
 }
 
 #[cfg(test)]
@@ -38,7 +36,7 @@ mod tests {
 
     #[test]
     fn typographic_family_needs_condensed_stretch() {
-        let c = pick(|c| c.family == "Helvetica LT Std").unwrap();
+        let c = pick(|f| f == "Helvetica LT Std").unwrap();
         assert_eq!(c.family, "Helvetica LT Std");
         assert!(c.condensed);
     }
