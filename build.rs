@@ -19,22 +19,26 @@ fn find_llvm_rc() -> io::Result<String> {
         return Ok(rc);
     }
     // Probe standard LLVM RC names from newest to oldest.
-    for name in &["llvm-rc-19", "llvm-rc-18", "llvm-rc-17", "llvm-rc-16", "llvm-rc-15", "llvm-rc-14", "llvm-rc"] {
-        if Command::new(name).arg("--version").output().is_ok() {
+    // -no-preprocess flag only available in llvm-rc 17+, so restrict probe accordingly.
+    for name in &["llvm-rc-19", "llvm-rc-18", "llvm-rc-17", "llvm-rc"] {
+        // Check if command can be executed (exit code may be non-zero for help).
+        if Command::new(name).output().is_ok() {
             return Ok(name.to_string());
         }
     }
     Err(io::Error::new(
         io::ErrorKind::NotFound,
-        "llvm-rc not found: tried llvm-rc-19..14 and llvm-rc; set LLVM_RC to override",
+        "llvm-rc not found: tried llvm-rc-19, llvm-rc-18, llvm-rc-17, and llvm-rc; set LLVM_RC to override",
     ))
 }
 
 fn embed_manifest_via_coff(out_dir: &PathBuf) -> io::Result<()> {
     // Write manifest XML with PerMonitorV2 DPI + comctl32 v6 dependency.
-    let manifest_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    // Version derived from CARGO_PKG_VERSION; floor is Windows 10 1703+ (spec requirement).
+    let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.1.0".to_string());
+    let manifest_xml = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3" manifestVersion="1.0">
-  <assemblyIdentity name="flipsaver" type="win32" version="0.1.0.0"/>
+  <assemblyIdentity name="flipsaver" type="win32" version="{}.0"/>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity language="*" name="Microsoft.Windows.Common-Controls" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" type="win32" version="6.0.0.0"/>
@@ -43,10 +47,10 @@ fn embed_manifest_via_coff(out_dir: &PathBuf) -> io::Result<()> {
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
       <maxversiontested Id="10.0.18362.1"/>
-      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
-      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
-      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
-      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+      <supportedOS Id="{{35138b9a-5d96-4fbd-8e2d-a2440225f93a}}"/>
+      <supportedOS Id="{{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}}"/>
+      <supportedOS Id="{{1f676c76-80e1-4239-95bb-83d0f6d0da78}}"/>
+      <supportedOS Id="{{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}}"/>
     </application>
   </compatibility>
   <asmv3:application>
@@ -54,7 +58,6 @@ fn embed_manifest_via_coff(out_dir: &PathBuf) -> io::Result<()> {
       <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">permonitorv2</dpiAwareness>
       <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
-      <printerDriverIsolation xmlns="http://schemas.microsoft.com/SMI/2011/WindowsSettings">true</printerDriverIsolation>
     </asmv3:windowsSettings>
   </asmv3:application>
   <asmv3:trustInfo>
@@ -64,7 +67,7 @@ fn embed_manifest_via_coff(out_dir: &PathBuf) -> io::Result<()> {
       </asmv3:requestedPrivileges>
     </asmv3:security>
   </asmv3:trustInfo>
-</assembly>"#;
+</assembly>"#, version);
 
     let manifest_path = out_dir.join("app.manifest");
     let mut f = File::create(&manifest_path)?;
@@ -115,27 +118,18 @@ fn main() {
     println!("cargo:rustc-env=FLIPSAVER_GIT_SHA={sha}");
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs");
+    println!("cargo:rerun-if-changed=.git/packed-refs");
 
     // Manifest (PMv2 DPI awareness + comctl32 v6 for the dialog) embedded as COFF resource.
-    // On Windows hosts: use embed_manifest with mt.exe (via /MANIFEST:EMBED).
-    // On cross-compile: use llvm-rc to compile manifest to .res, bypassing mt.exe need.
+    // Use llvm-rc to compile manifest to .res; this works on all hosts and bypasses mt.exe.
     // SetProcessDpiAwarenessContext at startup (main.rs) provides belt-and-braces fallback.
 
     if std::env::var("CARGO_CFG_WINDOWS").is_ok() {
         match env::var("OUT_DIR") {
             Ok(out_dir) => {
                 let out_path = PathBuf::from(out_dir);
-                if std::env::consts::OS == "windows" {
-                    // Native Windows build: use embed_manifest with mt.exe.
-                    if let Err(e) = embed_manifest::embed_manifest(embed_manifest::new_manifest("flipsaver"))
-                    {
-                        eprintln!("Warning: failed to embed manifest: {e}");
-                    }
-                } else {
-                    // Cross-compile: use llvm-rc to generate COFF resource, bypassing mt.exe.
-                    if let Err(e) = embed_manifest_via_coff(&out_path) {
-                        panic!("failed to embed manifest via llvm-rc: {}", e);
-                    }
+                if let Err(e) = embed_manifest_via_coff(&out_path) {
+                    panic!("failed to embed manifest via llvm-rc: {}", e);
                 }
             }
             Err(_) => panic!("OUT_DIR env var not set"),

@@ -6,7 +6,6 @@ edition = "2021"
 # panic="abort" is release-only: dev/test profiles keep unwinding so
 # `cargo test` on the Linux host works.
 [build-dependencies]
-embed-manifest = "1.4"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
