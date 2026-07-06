@@ -159,7 +159,8 @@ pub mod draw {
         pub is_24h: bool,
         digits: ID2D1SolidColorBrush,
         black: ID2D1SolidColorBrush,
-        gradient: ID2D1GradientStopCollection,
+        gradient_brush: ID2D1LinearGradientBrush,
+        shade: ID2D1SolidColorBrush,
         large_format: IDWriteTextFormat,
         small_format: IDWriteTextFormat,
         dwrite: IDWriteFactory5,
@@ -195,6 +196,18 @@ pub mod draw {
                     D2D1_GAMMA_2_2,
                     D2D1_EXTEND_MODE_CLAMP,
                 )?;
+                // Cached once; start/end points are repositioned per box in
+                // draw_panel_digit. Rebuilt only when the whole cache is.
+                let gradient_brush = rt.CreateLinearGradientBrush(
+                    &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                        startPoint: windows_numerics::Vector2 { X: 0.0, Y: 0.0 },
+                        endPoint: windows_numerics::Vector2 { X: 0.0, Y: 1.0 },
+                    },
+                    None,
+                    &gradient,
+                )?;
+                // Opaque black; the fold sets per-frame opacity for the shade.
+                let shade = rt.CreateSolidColorBrush(&color(0x000000), None)?;
                 let mk_format = |px: i32| -> Result<IDWriteTextFormat> {
                     let f = gfx.dwrite.CreateTextFormat(
                         &HSTRING::from(gfx.font.family),
@@ -218,7 +231,8 @@ pub mod draw {
                     is_24h: settings.display_24hr,
                     digits,
                     black,
-                    gradient,
+                    gradient_brush,
+                    shade,
                     large_format,
                     small_format,
                     dwrite: gfx.dwrite.clone(),
@@ -226,7 +240,9 @@ pub mod draw {
             }
         }
 
-        unsafe fn draw_box(
+        /// Panel gradient + digit + optional marker, under the caller's
+        /// current transform and clip. No split line (drawn once on top).
+        unsafe fn draw_panel_digit(
             &self,
             rt: &ID2D1HwndRenderTarget,
             bl: &BoxLayout,
@@ -234,21 +250,17 @@ pub mod draw {
             marker: Option<Marker>,
         ) -> Result<()> {
             let r = rectf(bl.rect);
-            // Vertical gradient per box (original: LinearGradientMode.Vertical).
-            let brush = rt.CreateLinearGradientBrush(
-                &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
-                    startPoint: windows_numerics::Vector2 { X: r.left, Y: r.top },
-                    endPoint: windows_numerics::Vector2 { X: r.left, Y: r.bottom },
-                },
-                None,
-                &self.gradient,
-            )?;
+            // Reposition the cached vertical gradient onto this box.
+            self.gradient_brush
+                .SetStartPoint(windows_numerics::Vector2 { X: r.left, Y: r.top });
+            self.gradient_brush
+                .SetEndPoint(windows_numerics::Vector2 { X: r.left, Y: r.bottom });
             let rounded = D2D1_ROUNDED_RECT {
                 rect: r,
                 radiusX: self.layout.corner_radius as f32,
                 radiusY: self.layout.corner_radius as f32,
             };
-            rt.FillRoundedRectangle(&rounded, &brush);
+            rt.FillRoundedRectangle(&rounded, &self.gradient_brush);
 
             let wide: Vec<u16> = text.encode_utf16().collect();
             let tl = self.dwrite.CreateTextLayout(
@@ -265,7 +277,8 @@ pub mod draw {
             );
 
             if let Some(m) = marker {
-                let s: Vec<u16> = (if m == Marker::Am { "AM" } else { "PM" }).encode_utf16().collect();
+                let s: Vec<u16> =
+                    (if m == Marker::Am { "AM" } else { "PM" }).encode_utf16().collect();
                 let ml = self.dwrite.CreateTextLayout(&s, &self.small_format, 4096.0, 4096.0)?;
                 match m {
                     Marker::Am => {
@@ -278,8 +291,6 @@ pub mod draw {
                         );
                     }
                     Marker::Pm => {
-                        // Anchor is the text bottom edge (original subtracts
-                        // Font.Height); use the measured line height.
                         let mut metrics = DWRITE_TEXT_METRICS::default();
                         ml.GetMetrics(&mut metrics)?;
                         let (x, y_bottom) = bl.marker_bottom.unwrap();
@@ -295,7 +306,18 @@ pub mod draw {
                     }
                 }
             }
+            Ok(())
+        }
 
+        unsafe fn draw_box(
+            &self,
+            rt: &ID2D1HwndRenderTarget,
+            bl: &BoxLayout,
+            text: &str,
+            marker: Option<Marker>,
+        ) -> Result<()> {
+            self.draw_panel_digit(rt, bl, text, marker)?;
+            let r = rectf(bl.rect);
             // Split line per box, never spanning the face.
             rt.DrawLine(
                 windows_numerics::Vector2 { X: r.left, Y: bl.split_y as f32 },
