@@ -15,6 +15,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Live preview** (`/p`) for the Windows screensaver control panel.
 - **Settings dialog** (`/c`), 12/24 h format and size; stored in
   `%LOCALAPPDATA%\flipsaver\Settings.ini`.
-- **Startup instrumentation**, first-frame time via OutputDebugString
-  and `FLIPSAVER_LOG`.
 - **`--version` flag.**

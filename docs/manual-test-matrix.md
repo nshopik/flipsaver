@@ -24,15 +24,3 @@ Proportions, colors (#121212→#0A0A0A boxes, #B7B7B7 digits), split line
 per box, AM top / PM bottom marker at 9% size, border scaling across the
 size slider. Pixel-perfection not required; structure and proportions are.
 
-## Cold-start measurement (spec target: < 100 ms median)
-
-1. `set FLIPSAVER_LOG=%TEMP%\flipsaver.log`
-2. Flush the standby list (RAMMap → Empty → Empty Standby List, or
-   `EmptyStandbyList.exe standbylist`).
-3. Run `flipsaver.scr /s`, exit. Repeat for 5 measured runs, flushing
-   before each.
-4. Median of the 5 `first frame in N ms` lines → README results table.
-5. Same protocol against FlipIt.scr (timestamp instrumentation:
-   DebugView first-paint OutputDebugString is absent in FlipIt — use a
-   stopwatch-by-eye or ETW `Microsoft-Windows-Win32k` focus events; note
-   the method next to the number).
