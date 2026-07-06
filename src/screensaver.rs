@@ -50,25 +50,13 @@ impl Gfx {
     /// family name only — the font itself never ships with the binary);
     /// otherwise load the embedded Oswald.
     unsafe fn pick_font(dwrite: &IDWriteFactory5) -> FontChoice {
-        let mut sys: Option<IDWriteFontCollection1> = None;
-        // No downloadable fonts: only locally installed families count.
-        if dwrite.GetSystemFontCollection(false, &mut sys, false).is_ok() {
-            if let Some(sys) = sys {
-                let installed = |family: &str| {
-                    let name = HSTRING::from(family);
-                    let (mut index, mut exists) = (0u32, BOOL::default());
-                    sys.FindFamilyName(&name, &mut index, &mut exists).is_ok()
-                        && exists.as_bool()
-                };
-                if let Some(c) = crate::fontsel::pick(installed) {
-                    let stretch = if c.condensed {
-                        DWRITE_FONT_STRETCH_CONDENSED
-                    } else {
-                        DWRITE_FONT_STRETCH_NORMAL
-                    };
-                    return FontChoice { collection: None, family: c.family, stretch };
-                }
-            }
+        if let Some(c) = probe_system_font(dwrite) {
+            let stretch = if c.condensed {
+                DWRITE_FONT_STRETCH_CONDENSED
+            } else {
+                DWRITE_FONT_STRETCH_NORMAL
+            };
+            return FontChoice { collection: None, family: c.family, stretch };
         }
         match Self::load_embedded_font(dwrite) {
             Ok(fonts) => FontChoice {
@@ -103,6 +91,31 @@ impl Gfx {
         builder.AddFontFile(&file)?;
         let set = builder.CreateFontSet()?;
         dwrite.CreateFontCollectionFromFontSet(&set)
+    }
+}
+
+/// First preferred family present in the system collection, by name only.
+unsafe fn probe_system_font(dwrite: &IDWriteFactory5) -> Option<&'static crate::fontsel::Candidate> {
+    let mut sys: Option<IDWriteFontCollection1> = None;
+    // No downloadable fonts: only locally installed families count.
+    dwrite.GetSystemFontCollection(false, &mut sys, false).ok()?;
+    let sys = sys?;
+    crate::fontsel::pick(|family| {
+        let name = HSTRING::from(family);
+        let (mut index, mut exists) = (0u32, BOOL::default());
+        sys.FindFamilyName(&name, &mut index, &mut exists).is_ok() && exists.as_bool()
+    })
+}
+
+/// Font the saver will render with, for display in the /c dialog.
+/// Same probe as Gfx::new, without loading the Oswald collection.
+pub fn font_display_name() -> &'static str {
+    unsafe {
+        let dwrite: Result<IDWriteFactory5> = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED);
+        match dwrite {
+            Ok(d) => probe_system_font(&d).map(|c| c.family).unwrap_or("Oswald (embedded)"),
+            Err(_) => "Oswald (embedded)",
+        }
     }
 }
 

@@ -38,5 +38,5 @@ Otherwise digits render in
 embedded in the binary. Licensed under the SIL Open Font License — see
 `assets/OFL.txt`.
 
-The chosen font is logged at startup via OutputDebugString
-(`flipsaver: font: ...`).
+The settings dialog (`/c`) shows which font is in use; it is also
+logged at startup via OutputDebugString (`flipsaver: font: ...`).
