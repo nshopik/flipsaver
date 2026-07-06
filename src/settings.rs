@@ -1,16 +1,44 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_SCALE: i32 = 70;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Orientation {
+    Auto,
+    Horizontal,
+    Vertical,
+}
+
+impl Orientation {
+    /// Anything outside {1,2} is Auto — consistent with the lenient parser.
+    pub fn from_ini(v: i32) -> Orientation {
+        match v {
+            1 => Orientation::Horizontal,
+            2 => Orientation::Vertical,
+            _ => Orientation::Auto,
+        }
+    }
+
+    pub fn to_ini(self) -> i32 {
+        match self {
+            Orientation::Auto => 0,
+            Orientation::Horizontal => 1,
+            Orientation::Vertical => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub display_24hr: bool,
     pub scale: i32, // 0..=100, slider value x 10
+    pub screens: BTreeMap<String, Orientation>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { display_24hr: false, scale: DEFAULT_SCALE }
+        Settings { display_24hr: false, scale: DEFAULT_SCALE, screens: BTreeMap::new() }
     }
 }
 
@@ -41,17 +69,44 @@ impl Settings {
                     "Scale" => s.scale = value.trim().parse().unwrap_or(DEFAULT_SCALE),
                     _ => {}
                 }
+            } else if let Some(name) = section.strip_prefix("Screen ") {
+                if key == "Orientation" {
+                    let v = value.trim().parse::<i32>().unwrap_or(0);
+                    s.screens.insert(name.to_string(), Orientation::from_ini(v));
+                }
             }
         }
         s
     }
 
     pub fn to_ini_text(&self) -> String {
-        format!(
+        let mut out = format!(
             "[General]\r\nDisplay24Hr={}\r\nScale={}\r\n\r\n",
             if self.display_24hr { 1 } else { 0 },
             self.scale
-        )
+        );
+        for (name, orient) in &self.screens {
+            if *orient == Orientation::Auto {
+                continue;
+            }
+            out.push_str(&format!(
+                "[Screen {}]\r\nOrientation={}\r\n\r\n",
+                name,
+                orient.to_ini()
+            ));
+        }
+        out
+    }
+
+    /// Single orientation resolution point. Explicit setting wins; Auto or
+    /// an absent monitor falls back to aspect (portrait → vertical).
+    /// Returns `true` for vertical.
+    pub fn effective_orientation(&self, device: &str, width: i32, height: i32) -> bool {
+        match self.screens.get(device) {
+            Some(Orientation::Horizontal) => false,
+            Some(Orientation::Vertical) => true,
+            _ => height > width,
+        }
     }
 }
 
@@ -62,7 +117,7 @@ pub fn load(path: &Path) -> Settings {
     }
 }
 
-pub fn save(path: &Path, s: Settings) -> std::io::Result<()> {
+pub fn save(path: &Path, s: &Settings) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -119,7 +174,11 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let s = Settings { display_24hr: true, scale: 90 };
+        let s = Settings {
+            display_24hr: true,
+            scale: 90,
+            screens: std::collections::BTreeMap::new(),
+        };
         assert_eq!(Settings::from_ini_text(&s.to_ini_text()), s);
     }
 
@@ -135,9 +194,68 @@ mod tests {
             .join(format!("flipsaver-test-{}", std::process::id()))
             .join("nested");
         let path = dir.join("Settings.ini");
-        let s = Settings { display_24hr: true, scale: 20 };
-        save(&path, s).unwrap();
+        let s = Settings {
+            display_24hr: true,
+            scale: 20,
+            screens: std::collections::BTreeMap::new(),
+        };
+        save(&path, &s).unwrap();
         assert_eq!(load(&path), s);
         std::fs::remove_dir_all(dir.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn parses_screen_section() {
+        let s = Settings::from_ini_text(
+            "[General]\nScale=70\n[Screen DISPLAY1]\nOrientation=2\n",
+        );
+        assert_eq!(s.screens.get("DISPLAY1"), Some(&Orientation::Vertical));
+    }
+
+    #[test]
+    fn screen_garbage_orientation_is_auto() {
+        let s = Settings::from_ini_text("[Screen DISPLAY1]\nOrientation=abc\n");
+        assert_eq!(s.screens.get("DISPLAY1"), Some(&Orientation::Auto));
+        let s = Settings::from_ini_text("[Screen DISPLAY1]\nOrientation=9\n");
+        assert_eq!(s.screens.get("DISPLAY1"), Some(&Orientation::Auto));
+    }
+
+    #[test]
+    fn auto_screens_are_omitted_on_save() {
+        let mut s = Settings::default();
+        s.screens.insert("DISPLAY1".into(), Orientation::Auto);
+        s.screens.insert("DISPLAY2".into(), Orientation::Vertical);
+        let text = s.to_ini_text();
+        assert!(!text.contains("[Screen DISPLAY1]"));
+        assert!(text.contains("[Screen DISPLAY2]\r\nOrientation=2"));
+    }
+
+    #[test]
+    fn screen_round_trip_preserves_explicit() {
+        let mut s = Settings {
+            display_24hr: true,
+            scale: 40,
+            screens: std::collections::BTreeMap::new(),
+        };
+        s.screens.insert("DISPLAY1".into(), Orientation::Horizontal);
+        // A monitor not currently attached must survive a save.
+        s.screens.insert("DISPLAY9".into(), Orientation::Vertical);
+        assert_eq!(Settings::from_ini_text(&s.to_ini_text()), s);
+    }
+
+    #[test]
+    fn effective_orientation_explicit_wins() {
+        let mut s = Settings::default();
+        s.screens.insert("DISPLAY1".into(), Orientation::Vertical);
+        assert!(s.effective_orientation("DISPLAY1", 1920, 1080));
+        s.screens.insert("DISPLAY1".into(), Orientation::Horizontal);
+        assert!(!s.effective_orientation("DISPLAY1", 1080, 1920));
+    }
+
+    #[test]
+    fn effective_orientation_auto_by_aspect() {
+        let s = Settings::default();
+        assert!(s.effective_orientation("DISPLAY1", 1080, 1920));
+        assert!(!s.effective_orientation("DISPLAY1", 1920, 1080));
     }
 }
