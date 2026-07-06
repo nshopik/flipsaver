@@ -173,13 +173,14 @@ pub fn flip_frame(progress: f64) -> FlipFrame {
 
 #[cfg(windows)]
 pub mod draw {
-    use super::{compute, format_time, BoxLayout, Layout, Marker, Rect};
+    use super::{compute, flip_frame, format_time, BoxLayout, FlipFrame, Layout, Marker, Phase, Rect, FLIP_MS};
     use crate::screensaver::Gfx;
     use crate::settings::Settings;
     use windows::core::*;
     use windows::Win32::Graphics::Direct2D::Common::*;
     use windows::Win32::Graphics::Direct2D::*;
     use windows::Win32::Graphics::DirectWrite::*;
+    use windows_numerics::Matrix3x2;
 
     fn color(rgb: u32) -> D2D1_COLOR_F {
         D2D1_COLOR_F {
@@ -373,20 +374,161 @@ pub mod draw {
             );
             Ok(())
         }
+
+        /// panel+digit clipped to `clip` under identity (no fold).
+        unsafe fn draw_clipped(
+            &self,
+            rt: &ID2D1HwndRenderTarget,
+            bl: &BoxLayout,
+            clip: D2D_RECT_F,
+            text: &str,
+            marker: Option<Marker>,
+        ) -> Result<()> {
+            rt.SetTransform(&Matrix3x2::identity());
+            rt.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
+            self.draw_panel_digit(rt, bl, text, marker)?;
+            rt.PopAxisAlignedClip();
+            Ok(())
+        }
+
+        /// One folding leaf: panel+digit clipped to `clip`, squashed to
+        /// `leaf_scale` about the hinge, then a shade overlay.
+        ///
+        /// D2D quirk (do NOT reorder): PushAxisAlignedClip bakes its rect into
+        /// device space using the transform active *at push time*; a later
+        /// SetTransform does not re-warp an already-pushed clip. So push the
+        /// clip under identity (screen coords), THEN set the fold transform.
+        /// The pivot sits on the hinge (a fixed point of the scale), and the
+        /// squashed content is always a subset of the un-scaled half-rect, so
+        /// this order clips correctly in both phases.
+        unsafe fn draw_leaf(
+            &self,
+            rt: &ID2D1HwndRenderTarget,
+            bl: &BoxLayout,
+            clip: D2D_RECT_F,
+            hinge: f32,
+            leaf_scale: f32,
+            text: &str,
+            marker: Option<Marker>,
+            shade_alpha: f32,
+        ) -> Result<()> {
+            rt.SetTransform(&Matrix3x2::identity());
+            rt.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
+            // scale(1, s) about (x, hinge): windows-numerics uses D2D's
+            // row-vector convention, so the hinge line stays static as s
+            // varies (a reversed multiply would smear instead of squash -
+            // the manual-matrix hinge check catches that).
+            rt.SetTransform(&Matrix3x2::scale_around(
+                1.0,
+                leaf_scale,
+                windows_numerics::Vector2 { X: 0.0, Y: hinge },
+            ));
+            self.draw_panel_digit(rt, bl, text, marker)?;
+            self.shade.SetOpacity(shade_alpha);
+            let rounded = D2D1_ROUNDED_RECT {
+                rect: rectf(bl.rect),
+                radiusX: self.layout.corner_radius as f32,
+                radiusY: self.layout.corner_radius as f32,
+            };
+            rt.FillRoundedRectangle(&rounded, &self.shade);
+            rt.SetTransform(&Matrix3x2::identity());
+            rt.PopAxisAlignedClip();
+            Ok(())
+        }
+
+        /// Full fold frame for one box: static backgrounds + the moving leaf,
+        /// then the split line on top at the hinge.
+        unsafe fn draw_fold(
+            &self,
+            rt: &ID2D1HwndRenderTarget,
+            bl: &BoxLayout,
+            f: FlipFrame,
+            old_text: &str,
+            old_marker: Option<Marker>,
+            new_text: &str,
+            new_marker: Option<Marker>,
+        ) -> Result<()> {
+            let r = rectf(bl.rect);
+            let hinge = bl.split_y as f32;
+            let top = D2D_RECT_F { left: r.left, top: r.top, right: r.right, bottom: hinge };
+            let bottom = D2D_RECT_F { left: r.left, top: hinge, right: r.right, bottom: r.bottom };
+            match f.phase {
+                Phase::UpperFold => {
+                    // reveal new top behind; old bottom static; old leaf folds down
+                    self.draw_clipped(rt, bl, top, new_text, new_marker)?;
+                    self.draw_clipped(rt, bl, bottom, old_text, old_marker)?;
+                    self.draw_leaf(rt, bl, top, hinge, f.leaf_scale, old_text, old_marker, f.shade_alpha)?;
+                }
+                Phase::LowerFall => {
+                    // new top static; old bottom behind; new leaf falls open
+                    self.draw_clipped(rt, bl, top, new_text, new_marker)?;
+                    self.draw_clipped(rt, bl, bottom, old_text, old_marker)?;
+                    self.draw_leaf(rt, bl, bottom, hinge, f.leaf_scale, new_text, new_marker, f.shade_alpha)?;
+                }
+            }
+            rt.SetTransform(&Matrix3x2::identity());
+            rt.DrawLine(
+                windows_numerics::Vector2 { X: r.left, Y: hinge },
+                windows_numerics::Vector2 { X: r.right, Y: hinge },
+                &self.black,
+                self.layout.split_stroke,
+                None,
+            );
+            Ok(())
+        }
+
+        /// (digit string, marker) for a box given its value. Markers ride the
+        /// hours box only; format_time derives them from the hour.
+        fn box_text(&self, is_hours: bool, value: u32) -> (String, Option<Marker>) {
+            if is_hours {
+                let (h, _m, marker) = format_time(value, 0, self.is_24h);
+                (h, marker)
+            } else {
+                (format_time(0, value, self.is_24h).1, None)
+            }
+        }
+
+        /// Render one box: static when no anim (or finished), else the fold.
+        unsafe fn draw_box_animated(
+            &self,
+            rt: &ID2D1HwndRenderTarget,
+            bl: &BoxLayout,
+            is_hours: bool,
+            settled: u32,
+            anim: Option<&crate::screensaver::Anim>,
+            now_ms: u64,
+        ) -> Result<()> {
+            match anim {
+                None => {
+                    let (t, m) = self.box_text(is_hours, settled);
+                    self.draw_box(rt, bl, &t, m)
+                }
+                Some(a) => {
+                    let progress = now_ms.saturating_sub(a.start_ms) as f64 / FLIP_MS;
+                    let (new_t, new_m) = self.box_text(is_hours, a.to);
+                    if progress >= 1.0 {
+                        self.draw_box(rt, bl, &new_t, new_m)
+                    } else {
+                        let (old_t, old_m) = self.box_text(is_hours, a.from);
+                        self.draw_fold(rt, bl, flip_frame(progress), &old_t, old_m, &new_t, new_m)
+                    }
+                }
+            }
+        }
     }
 
     pub fn draw_face(
         rt: &ID2D1HwndRenderTarget,
         cache: &FaceCache,
-        hour: u32,
-        minute: u32,
+        shown: (u32, u32),
+        hours_anim: Option<&crate::screensaver::Anim>,
+        minutes_anim: Option<&crate::screensaver::Anim>,
+        now_ms: u64,
     ) -> Result<()> {
         unsafe {
             rt.Clear(Some(&color(0x000000)));
-            let (h, m, marker) = format_time(hour, minute, cache.is_24h);
-            // One marker only: AM top corner before noon, PM bottom after.
-            cache.draw_box(rt, &cache.layout.hours, &h, marker)?;
-            cache.draw_box(rt, &cache.layout.minutes, &m, None)?;
+            cache.draw_box_animated(rt, &cache.layout.hours, true, shown.0, hours_anim, now_ms)?;
+            cache.draw_box_animated(rt, &cache.layout.minutes, false, shown.1, minutes_anim, now_ms)?;
             Ok(())
         }
     }
