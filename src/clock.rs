@@ -126,6 +126,51 @@ pub fn format_time(hour: u32, minute: u32, is_24h: bool) -> (String, String, Opt
     }
 }
 
+/// Total flip duration; `progress = elapsed_ms / FLIP_MS`.
+pub const FLIP_MS: f64 = 600.0;
+const MAX_SHADE: f32 = 0.55;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    UpperFold, // t < 0.5: old value folds down to the hinge
+    LowerFall, // t >= 0.5: new value falls open from the hinge
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlipFrame {
+    pub phase: Phase,
+    /// Y-scale of the folding leaf, 0 (edge-on) .. 1 (flat).
+    pub leaf_scale: f32,
+    /// Translucent-black overlay alpha, 0 .. MAX_SHADE.
+    pub shade_alpha: f32,
+}
+
+fn ease_in_out_cubic(p: f64) -> f64 {
+    if p < 0.5 {
+        4.0 * p * p * p
+    } else {
+        let q = -2.0 * p + 2.0;
+        1.0 - q * q * q / 2.0
+    }
+}
+
+/// Split-flap fold geometry for `progress` in [0,1] (clamped). One flap read
+/// as two leaves: phase 1 the upper leaf (old) folds 0->pi/2, phase 2 the
+/// lower leaf (new) falls pi/2->0. `leaf_scale = cos(theta)` is the projected
+/// foreshortening; using cosine in both phases keeps the two leaves continuous
+/// (a linear phase-2 ramp would visibly clash). Shade peaks edge-on.
+pub fn flip_frame(progress: f64) -> FlipFrame {
+    let t = ease_in_out_cubic(progress.clamp(0.0, 1.0));
+    let (phase, theta) = if t < 0.5 {
+        (Phase::UpperFold, t * std::f64::consts::PI)
+    } else {
+        (Phase::LowerFall, (1.0 - t) * std::f64::consts::PI)
+    };
+    let leaf_scale = theta.cos() as f32;
+    let shade_alpha = MAX_SHADE * (1.0 - leaf_scale);
+    FlipFrame { phase, leaf_scale, shade_alpha }
+}
+
 #[cfg(windows)]
 pub mod draw {
     use super::{compute, format_time, BoxLayout, Layout, Marker, Rect};
@@ -399,5 +444,48 @@ mod tests {
     fn format_24h() {
         assert_eq!(format_time(0, 5, true), ("00".into(), "05".into(), None));
         assert_eq!(format_time(23, 5, true), ("23".into(), "05".into(), None));
+    }
+
+    #[test]
+    fn flip_frame_endpoints() {
+        // progress 0: flat, no shade
+        let f = flip_frame(0.0);
+        assert_eq!(f.phase, Phase::UpperFold);
+        assert!((f.leaf_scale - 1.0).abs() < 1e-4);
+        assert!(f.shade_alpha.abs() < 1e-4);
+        // progress 1: flat again (leaf fully fallen), no shade
+        let f = flip_frame(1.0);
+        assert_eq!(f.phase, Phase::LowerFall);
+        assert!((f.leaf_scale - 1.0).abs() < 1e-4);
+        assert!(f.shade_alpha.abs() < 1e-4);
+    }
+
+    #[test]
+    fn flip_frame_midpoint_is_edge_on() {
+        // eased(0.5)==0.5 -> boundary: leaf edge-on (scale 0), shade at peak
+        let f = flip_frame(0.5);
+        assert_eq!(f.phase, Phase::LowerFall);
+        assert!(f.leaf_scale.abs() < 1e-4);
+        assert!((f.shade_alpha - 0.55).abs() < 1e-4);
+    }
+
+    #[test]
+    fn flip_frame_locks_cosine_curve() {
+        // A linear phase-2 ramp would give leaf_scale ~0.875 at progress 0.75;
+        // the cosine gives ~0.981. Pin both mid-phase points so the shape,
+        // not just the ends, is locked.
+        let up = flip_frame(0.25);
+        assert_eq!(up.phase, Phase::UpperFold);
+        assert!((up.leaf_scale - 0.98079).abs() < 1e-3);
+        let down = flip_frame(0.75);
+        assert_eq!(down.phase, Phase::LowerFall);
+        assert!((down.leaf_scale - 0.98079).abs() < 1e-3);
+    }
+
+    #[test]
+    fn flip_frame_clamps_past_one() {
+        let f = flip_frame(1.7);
+        assert_eq!(f.phase, Phase::LowerFall);
+        assert!((f.leaf_scale - 1.0).abs() < 1e-4);
     }
 }
