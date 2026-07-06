@@ -2,7 +2,7 @@
 
 Rust rewrite of the [FlipIt](https://github.com/phaselden/FlipIt)
 flip-clock screensaver for Windows: a single small native `.scr`, no
-runtime dependencies, cold start well under FlipIt's ~1 s.
+runtime dependencies, targets cold start < 100 ms (measurements pending).
 
 v0.1 ships the local flip clock on all monitors, live preview, and a
 minimal settings dialog (12/24 h, size). World times come later.
