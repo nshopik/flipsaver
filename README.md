@@ -29,6 +29,14 @@ built-in QueryPerformanceCounter instrumentation
 
 ## Font
 
-Digits render in [Oswald](https://github.com/googlefonts/OswaldFont)
-Bold (static cut), embedded in the binary. Licensed under the SIL Open
-Font License — see `assets/OFL.txt`.
+If Helvetica LT Std Condensed (the font the original FlipIt uses) is
+installed on the system, flipsaver uses it automatically. It is a
+licensed font and is never shipped with the binary.
+
+Otherwise digits render in
+[Oswald](https://github.com/googlefonts/OswaldFont) Bold (static cut),
+embedded in the binary. Licensed under the SIL Open Font License — see
+`assets/OFL.txt`.
+
+The chosen font is logged at startup via OutputDebugString
+(`flipsaver: font: ...`).

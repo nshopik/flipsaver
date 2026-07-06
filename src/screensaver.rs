@@ -16,13 +16,22 @@ const CLASS_NAME: PCWSTR = w!("flipsaverwnd");
 
 static OSWALD_BOLD: &[u8] = include_bytes!("../assets/Oswald-Bold.ttf");
 
+/// Resolved font: system Helvetica LT Std Cond when installed, else the
+/// embedded Oswald collection. Weight is always Bold; stretch differs
+/// (the typographic "Helvetica LT Std" family needs Condensed).
+pub struct FontChoice {
+    /// None means system font collection (or last-resort Segoe UI).
+    pub collection: Option<IDWriteFontCollection1>,
+    pub family: &'static str,
+    pub stretch: DWRITE_FONT_STRETCH,
+}
+
 /// Process-wide device-independent graphics resources, shared by every
 /// window (fullscreen and preview) via Rc.
 pub struct Gfx {
     pub d2d: ID2D1Factory,
     pub dwrite: IDWriteFactory5,
-    pub fonts: Option<IDWriteFontCollection1>,
-    pub family: &'static str,
+    pub font: FontChoice,
 }
 
 impl Gfx {
@@ -31,13 +40,50 @@ impl Gfx {
             let d2d: ID2D1Factory =
                 D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let dwrite: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            match Self::load_embedded_font(&dwrite) {
-                Ok(fonts) => Ok(Gfx { d2d, dwrite, fonts: Some(fonts), family: "Oswald" }),
-                Err(e) => {
-                    // Embedded bytes failing to load is a build defect, not
-                    // a runtime condition: assert in debug, degrade in release.
-                    debug_assert!(false, "embedded font load failed: {e:?}");
-                    Ok(Gfx { d2d, dwrite, fonts: None, family: "Segoe UI" })
+            let font = Self::pick_font(&dwrite);
+            debug_log(&format!("flipsaver: font: {}", font.family));
+            Ok(Gfx { d2d, dwrite, font })
+        }
+    }
+
+    /// Prefer the licensed Helvetica when installed on the system (probe by
+    /// family name only — the font itself never ships with the binary);
+    /// otherwise load the embedded Oswald.
+    unsafe fn pick_font(dwrite: &IDWriteFactory5) -> FontChoice {
+        let mut sys: Option<IDWriteFontCollection1> = None;
+        // No downloadable fonts: only locally installed families count.
+        if dwrite.GetSystemFontCollection(false, &mut sys, false).is_ok() {
+            if let Some(sys) = sys {
+                let installed = |family: &str| {
+                    let name = HSTRING::from(family);
+                    let (mut index, mut exists) = (0u32, BOOL::default());
+                    sys.FindFamilyName(&name, &mut index, &mut exists).is_ok()
+                        && exists.as_bool()
+                };
+                if let Some(c) = crate::fontsel::pick(installed) {
+                    let stretch = if c.condensed {
+                        DWRITE_FONT_STRETCH_CONDENSED
+                    } else {
+                        DWRITE_FONT_STRETCH_NORMAL
+                    };
+                    return FontChoice { collection: None, family: c.family, stretch };
+                }
+            }
+        }
+        match Self::load_embedded_font(dwrite) {
+            Ok(fonts) => FontChoice {
+                collection: Some(fonts),
+                family: "Oswald",
+                stretch: DWRITE_FONT_STRETCH_NORMAL,
+            },
+            Err(e) => {
+                // Embedded bytes failing to load is a build defect, not
+                // a runtime condition: assert in debug, degrade in release.
+                debug_assert!(false, "embedded font load failed: {e:?}");
+                FontChoice {
+                    collection: None,
+                    family: "Segoe UI",
+                    stretch: DWRITE_FONT_STRETCH_NORMAL,
                 }
             }
         }
@@ -57,6 +103,13 @@ impl Gfx {
         builder.AddFontFile(&file)?;
         let set = builder.CreateFontSet()?;
         dwrite.CreateFontCollectionFromFontSet(&set)
+    }
+}
+
+fn debug_log(line: &str) {
+    let wide: Vec<u16> = line.encode_utf16().chain([0]).collect();
+    unsafe {
+        windows::Win32::System::Diagnostics::Debug::OutputDebugStringW(PCWSTR(wide.as_ptr()));
     }
 }
 

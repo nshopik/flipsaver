@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **System font preference**, uses installed Helvetica LT Std Condensed
+  when present, falls back to embedded Oswald.
 - **Fullscreen flip clock** (`/s`) on every monitor, exits on input.
 - **Live preview** (`/p`) for the Windows screensaver control panel.
 - **Settings dialog** (`/c`), 12/24 h format and size; stored in
