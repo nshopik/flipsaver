@@ -23,6 +23,15 @@ same machine.
 | 14 | Orientation persists per monitor across restarts; `Settings.ini` gains `[Screen <name>]` only for non-Auto | |
 | 15 | Undock a monitor, save from `/c`, redock: the undocked monitor's override survived | |
 | 16 | Old `Settings.ini` (no `[Screen]` sections) → all monitors Auto, landscape identical to v0.1 | |
+| 17 | Minute flip: minute box folds old→new over ~600ms (upper leaf down, then new lower falls) | |
+| 18 | Top of hour (e.g. 12:59→13:00): hour and minute boxes flip simultaneously | |
+| 19 | `/c`: uncheck "Flip animation", `/s` → value snaps instantly, no fold; re-check restores fold | |
+| 20 | Preview (`/p`) animates the fold on each minute tick | |
+| 21 | Multi-monitor: each screen's flip runs independently | |
+| 22 | CPU idle between flips (fast timer runs only during the ~600ms fold, not continuously) | |
+| 23 | Hinge line stays visually static through the fold — no vertical smear (catches reversed matrix multiply) | |
+| 24 | No spurious flip in the first second after `/s` launch (first paint primes, no startup fold) | |
+| 25 | Absent `FlipAnimation` key in old `Settings.ini` → animation on by default | |
 
 ## Fidelity (side-by-side vs FlipIt, same machine)
 

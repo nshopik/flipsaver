@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Flip animation**: digit changes fold like a split-flap board (~600ms),
+  toggleable in the settings dialog (`FlipAnimation` in `[General]`, on by
+  default).
 - **Vertical clock layout** (hours above minutes), chosen automatically on
   portrait monitors.
 - **Per-monitor orientation** in the settings dialog: Auto / Horizontal /
