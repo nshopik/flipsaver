@@ -126,6 +126,13 @@ fn debug_log(line: &str) {
     }
 }
 
+/// A box's in-flight flip: old value folding to the new one since start_ms.
+pub struct Anim {
+    pub from: u32,
+    pub to: u32,
+    pub start_ms: u64,
+}
+
 pub struct WindowState {
     pub is_preview: bool,
     pub mouse: Option<(i32, i32)>,
@@ -133,7 +140,12 @@ pub struct WindowState {
     pub gfx: std::rc::Rc<Gfx>,
     pub target: Option<ID2D1HwndRenderTarget>,
     pub face: Option<crate::clock::draw::FaceCache>,
-    pub last_minute: u32,
+    /// Single source of truth for the rendered time. (61, 61) is the
+    /// not-yet-primed sentinel; first WM_PAINT overwrites it with real time.
+    pub shown: (u32, u32),
+    pub hours_anim: Option<Anim>,
+    pub minutes_anim: Option<Anim>,
+    pub flip_enabled: bool,
     pub device: String,
 }
 
@@ -320,9 +332,22 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 rt.BeginDraw();
                 let draw_ok = match &state.face {
                     Some(face) => {
-                        let (h, m) = local_hm();
-                        state.last_minute = m;
-                        crate::clock::draw::draw_face(&rt, face, h, m).is_ok()
+                        // Prime once: seed shown to real time so the first
+                        // slow tick doesn't diff against the sentinel and
+                        // fire a spurious startup flip.
+                        if state.shown == (61, 61) {
+                            state.shown = local_hm();
+                        }
+                        let now = windows::Win32::System::SystemInformation::GetTickCount64();
+                        crate::clock::draw::draw_face(
+                            &rt,
+                            face,
+                            state.shown,
+                            state.hours_anim.as_ref(),
+                            state.minutes_anim.as_ref(),
+                            now,
+                        )
+                        .is_ok()
                     }
                     None => {
                         rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
@@ -332,11 +357,13 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 let _ = draw_ok;
                 if let Err(e) = rt.EndDraw(None, None) {
                     if e.code() == D2DERR_RECREATE_TARGET {
-                        // Device lost (driver reset, remote session, ...):
-                        // this window rebuilds its own target and
-                        // device-dependent resources; others are untouched.
+                        // Device lost: rebuild target/resources AND abandon any
+                        // half-played fold so the rebuilt face settles static.
                         state.target = None;
                         state.face = None;
+                        state.hours_anim = None;
+                        state.minutes_anim = None;
+                        let _ = KillTimer(Some(hwnd), 2);
                         let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                 }
@@ -356,12 +383,55 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             LRESULT(0)
         }
         WM_TIMER => {
-            // Redraw only when the minute changes (no seconds in v0.1).
-            let (_, m) = local_hm();
-            if m != state.last_minute {
-                let _ = InvalidateRect(Some(hwnd), None, false);
+            let now = windows::Win32::System::SystemInformation::GetTickCount64();
+            match wp.0 {
+                1 => {
+                    // Slow tick: detect a value change against `shown`.
+                    let (h, m) = local_hm();
+                    let primed = state.shown != (61, 61);
+                    let mut started = false;
+                    if primed && h != state.shown.0 && state.flip_enabled {
+                        state.hours_anim = Some(Anim { from: state.shown.0, to: h, start_ms: now });
+                        started = true;
+                    }
+                    if primed && m != state.shown.1 && state.flip_enabled {
+                        state.minutes_anim = Some(Anim { from: state.shown.1, to: m, start_ms: now });
+                        started = true;
+                    }
+                    if (h, m) != state.shown {
+                        // shown advances whether or not we animate, so the next
+                        // tick won't re-detect the same diff; a disabled flip
+                        // just snaps (no anim, renderer draws shown).
+                        state.shown = (h, m);
+                        if started {
+                            // SetTimer returning 0 => box snaps next tick, no crash.
+                            SetTimer(Some(hwnd), 2, 16, None);
+                        }
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                    LRESULT(0)
+                }
+                2 => {
+                    // Fast tick: advance the fold; retire finished anims.
+                    let done = |a: &Option<Anim>| {
+                        a.as_ref().map_or(true, |x| {
+                            now.saturating_sub(x.start_ms) as f64 / crate::clock::FLIP_MS >= 1.0
+                        })
+                    };
+                    if done(&state.hours_anim) {
+                        state.hours_anim = None;
+                    }
+                    if done(&state.minutes_anim) {
+                        state.minutes_anim = None;
+                    }
+                    if state.hours_anim.is_none() && state.minutes_anim.is_none() {
+                        let _ = KillTimer(Some(hwnd), 2);
+                    }
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    LRESULT(0)
+                }
+                _ => LRESULT(0),
             }
-            LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
@@ -385,12 +455,14 @@ pub fn run_fullscreen(settings: Settings) {
                 WindowState {
                     is_preview: false,
                     mouse: None,
+                    flip_enabled: settings.flip_animation,
                     settings: settings.clone(),
                     gfx: gfx.clone(),
                     target: None,
                     face: None,
-                    // Impossible minute so the first paint always draws.
-                    last_minute: 61,
+                    shown: (61, 61),
+                    hours_anim: None,
+                    minutes_anim: None,
                     device,
                 },
             );
@@ -423,6 +495,7 @@ pub fn run_preview(settings: Settings, parent: isize) {
         // Same draw path as /s, including the 1 s timer, so the preview
         // minute stays live. Input-exit is disabled via is_preview; the
         // control panel terminates the process by destroying the parent.
+        let flip_enabled = settings.flip_animation;
         create_saver_window(
             instance,
             WS_CHILD,
@@ -436,7 +509,10 @@ pub fn run_preview(settings: Settings, parent: isize) {
                 gfx,
                 target: None,
                 face: None,
-                last_minute: 61,
+                shown: (61, 61),
+                hours_anim: None,
+                minutes_anim: None,
+                flip_enabled,
                 device: String::new(),
             },
         );
