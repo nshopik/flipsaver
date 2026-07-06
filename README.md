@@ -5,6 +5,8 @@ flip-clock screensaver for Windows — itself inspired by the original
 [Fliqlo](https://fliqlo.com/) by Yuji Adachi. A single small native
 `.scr` with no runtime dependencies.
 
+![flipsaver flip clock](flipsaver.png)
+
 v0.1 ships the local flip clock on all monitors, live preview, and a
 minimal settings dialog (12/24 h, size). World times come later.
 
