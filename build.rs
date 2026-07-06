@@ -18,22 +18,30 @@ fn main() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs");
 
-    // Manifest (PMv2 DPI awareness + comctl32 v6 for the dialog) embedding via linker
-    // resource only works when both target and host are Windows (mt.exe / manifest tool).
-    // Cross-compiling (Linux → Windows via cargo-xwin) cannot embed, so we rely on the
-    // declared functional backstop: SetProcessDpiAwarenessContext(PERMONITORAWAREV2) at
-    // startup in main(). This provides DPI awareness; the /c dialog loses comctl32 v6
-    // visual theming but remains functional.
+    // Manifest (PMv2 DPI awareness + comctl32 v6 for the dialog) embedding requires
+    // Windows tools: either mt.exe (for /MANIFEST:EMBED) or rc.exe/llvm-rc (for COFF .res).
+    // Cross-compilation targets cannot use these tools on non-Windows hosts.
+    // Tested approaches:
+    // - Approach #1 (llvm-rc): No RC tool available on this Linux host.
+    // - Approach #2 (lld-link /MANIFEST:EMBED): lld-link still requires mt.exe, fails.
+    // Therefore, we use the spec's declared functional backstop: SetProcessDpiAwarenessContext
+    // at startup (already in main.rs). This provides DPI awareness; the /c dialog loses
+    // comctl32 v6 visual theming but remains fully functional.
+
     if std::env::var("CARGO_CFG_WINDOWS").is_ok() {
         if std::env::consts::OS == "windows" {
+            // Native Windows build: use embed_manifest with mt.exe.
             if let Err(e) = embed_manifest::embed_manifest(embed_manifest::new_manifest("flipsaver"))
             {
                 eprintln!("Warning: failed to embed manifest: {e}");
             }
         } else {
+            // Cross-compile: manifest embedding tools (mt.exe, rc.exe, llvm-rc) unavailable.
+            // Runtime SetProcessDpiAwarenessContext call is the functional backstop.
             println!(
                 "cargo:warning=cross-compile manifest skipped (host={}, target=windows-msvc); \
-                 SetProcessDpiAwarenessContext at startup is the functional backstop",
+                 lld-link needs mt.exe for /MANIFEST:EMBED, not available on non-Windows; \
+                 SetProcessDpiAwarenessContext at startup provides functional DPI awareness",
                 std::env::consts::OS
             );
         }
