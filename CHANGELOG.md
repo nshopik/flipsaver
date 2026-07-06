@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Vertical clock layout** (hours above minutes), chosen automatically on
+  portrait monitors.
+- **Per-monitor orientation** in the settings dialog: Auto / Horizontal /
+  Vertical, stored per display in `Settings.ini` under `[Screen <name>]`.
+
 ## [0.1.0] - 2026-07-06
 
 ### Added

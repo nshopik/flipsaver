@@ -17,6 +17,12 @@ same machine.
 | 8 | Install via right-click → Install; runs from lock-screen idle | |
 | 9 | `--version` prints `Version: <tag> (<sha>), built for: windows-x86_64` | |
 | 10 | Delete/corrupt Settings.ini → `/s` runs with defaults (12h, scale 70) | |
+| 11 | Portrait monitor with no `[Screen]` section renders vertical by default; landscape unchanged | |
+| 12 | `/c`: one row per monitor; setting Vertical on a landscape monitor then `/s` renders vertical | |
+| 13 | Mixed multi-monitor: one Horizontal + one Vertical override both honored simultaneously | |
+| 14 | Orientation persists per monitor across restarts; `Settings.ini` gains `[Screen <name>]` only for non-Auto | |
+| 15 | Undock a monitor, save from `/c`, redock: the undocked monitor's override survived | |
+| 16 | Old `Settings.ini` (no `[Screen]` sections) → all monitors Auto, landscape identical to v0.1 | |
 
 ## Fidelity (side-by-side vs FlipIt, same machine)
 

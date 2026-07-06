@@ -75,14 +75,33 @@ fn box_layout(rect: Rect, with_markers: bool, is_preview: bool) -> BoxLayout {
     BoxLayout { rect, text, split_y, marker_top, marker_bottom }
 }
 
-pub fn compute(width: i32, height: i32, scale_percent: i32, is_24h: bool, is_preview: bool) -> Layout {
+pub fn compute(
+    width: i32,
+    height: i32,
+    scale_percent: i32,
+    is_24h: bool,
+    vertical: bool,
+    is_preview: bool,
+) -> Layout {
     let bp = border_percent(scale_percent);
-    let box_size = calc_box_size(width, bp, 2).min(calc_box_size(height, bp, 1));
-    let sep = (box_size as f64 * BOX_SEPARATION_PERCENT).round() as i32;
-    let start_x = calc_offset(width, 2, box_size, sep);
-    let start_y = calc_offset(height, 1, box_size, 0);
-    let hours_rect = Rect { x: start_x, y: start_y, w: box_size, h: box_size };
-    let minutes_rect = Rect { x: start_x + box_size + sep, ..hours_rect };
+    let (hours_rect, minutes_rect, box_size) = if vertical {
+        // One box across, two stacked; separation applied on the Y axis.
+        let box_size = calc_box_size(width, bp, 1).min(calc_box_size(height, bp, 2));
+        let sep = (box_size as f64 * BOX_SEPARATION_PERCENT).round() as i32;
+        let start_x = calc_offset(width, 1, box_size, 0);
+        let start_y = calc_offset(height, 2, box_size, sep);
+        let hours = Rect { x: start_x, y: start_y, w: box_size, h: box_size };
+        let minutes = Rect { y: start_y + box_size + sep, ..hours };
+        (hours, minutes, box_size)
+    } else {
+        let box_size = calc_box_size(width, bp, 2).min(calc_box_size(height, bp, 1));
+        let sep = (box_size as f64 * BOX_SEPARATION_PERCENT).round() as i32;
+        let start_x = calc_offset(width, 2, box_size, sep);
+        let start_y = calc_offset(height, 1, box_size, 0);
+        let hours = Rect { x: start_x, y: start_y, w: box_size, h: box_size };
+        let minutes = Rect { x: start_x + box_size + sep, ..hours };
+        (hours, minutes, box_size)
+    };
     Layout {
         hours: box_layout(hours_rect, !is_24h, is_preview),
         minutes: box_layout(minutes_rect, false, is_preview),
@@ -152,12 +171,19 @@ pub mod draw {
             gfx: &Gfx,
             width: i32,
             height: i32,
-            settings: Settings,
+            settings: &Settings,
+            vertical: bool,
             is_preview: bool,
         ) -> Result<FaceCache> {
             unsafe {
-                let layout =
-                    compute(width, height, settings.scale, settings.display_24hr, is_preview);
+                let layout = compute(
+                    width,
+                    height,
+                    settings.scale,
+                    settings.display_24hr,
+                    vertical,
+                    is_preview,
+                );
                 let digits = rt.CreateSolidColorBrush(&color(0xB7B7B7), None)?;
                 let black = rt.CreateSolidColorBrush(&color(0x000000), None)?;
                 let stops = [
@@ -312,7 +338,7 @@ mod tests {
 
     #[test]
     fn layout_1080p_scale70_fullscreen_12h() {
-        let l = compute(1920, 1080, 70, false, false);
+        let l = compute(1920, 1080, 70, false, false, false);
         assert_eq!(l.hours.rect, Rect { x: 230, y: 184, w: 712, h: 712 });
         assert_eq!(l.minutes.rect, Rect { x: 978, y: 184, w: 712, h: 712 });
         assert_eq!(l.corner_radius, 35);
@@ -330,19 +356,35 @@ mod tests {
 
     #[test]
     fn layout_24h_has_no_markers() {
-        let l = compute(1920, 1080, 70, true, false);
+        let l = compute(1920, 1080, 70, true, false, false);
         assert_eq!(l.hours.marker_top, None);
         assert_eq!(l.hours.marker_bottom, None);
     }
 
     #[test]
     fn layout_preview_320x240_scale70() {
-        let l = compute(320, 240, 70, false, true);
+        let l = compute(320, 240, 70, false, false, true);
         assert_eq!(l.hours.rect, Rect { x: 38, y: 60, w: 119, h: 119 });
         assert_eq!(l.minutes.rect, Rect { x: 163, y: 60, w: 119, h: 119 });
         // preview split: 1 px hairline at exact box center
         assert_eq!(l.hours.split_y, 119);
         assert_eq!(l.split_stroke, 1.0);
+    }
+
+    #[test]
+    fn layout_portrait_1080x1920_scale70_vertical() {
+        let l = compute(1080, 1920, 70, false, true, false);
+        assert_eq!(l.hours.rect, Rect { x: 184, y: 230, w: 712, h: 712 });
+        assert_eq!(l.minutes.rect, Rect { x: 184, y: 978, w: 712, h: 712 });
+        assert_eq!(l.corner_radius, 35);
+        assert_eq!(l.large_font_px, 605);
+        assert_eq!(l.small_font_px, 64);
+        assert_eq!(l.hours.text, Rect { x: 120, y: 258, w: 854, h: 712 });
+        assert_eq!(l.hours.split_y, 584);
+        assert_eq!(l.hours.marker_top, Some((219, 301)));
+        assert_eq!(l.hours.marker_bottom, Some((219, 871)));
+        // markers only ever on the hours box
+        assert_eq!(l.minutes.marker_top, None);
     }
 
     #[test]
