@@ -134,6 +134,7 @@ pub struct WindowState {
     pub target: Option<ID2D1HwndRenderTarget>,
     pub face: Option<crate::clock::draw::FaceCache>,
     pub last_minute: u32,
+    pub device: String,
 }
 
 /// Current local hour/minute, used both to paint and to decide whether a
@@ -173,18 +174,28 @@ unsafe fn ensure_target(hwnd: HWND, state: &mut WindowState) -> Option<ID2D1Hwnd
     state.target.clone()
 }
 
-fn enumerate_monitors() -> Vec<RECT> {
+pub fn enumerate_monitors() -> Vec<(RECT, String)> {
     unsafe extern "system" fn enum_proc(
-        _mon: HMONITOR,
+        mon: HMONITOR,
         _hdc: HDC,
         rect: *mut RECT,
         lparam: LPARAM,
     ) -> BOOL {
-        let v = &mut *(lparam.0 as *mut Vec<RECT>);
-        v.push(*rect);
+        let v = &mut *(lparam.0 as *mut Vec<(RECT, String)>);
+        let mut info = MONITORINFOEXW::default();
+        // szDevice is only populated when cbSize covers the Ex struct.
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if GetMonitorInfoW(mon, &mut info.monitorInfo as *mut MONITORINFO).as_bool() {
+            let name = String::from_utf16_lossy(&info.szDevice);
+            let name = name.trim_end_matches('\0').trim_start_matches(r"\\.\").to_string();
+            v.push((info.monitorInfo.rcMonitor, name));
+        } else {
+            // Failure → empty device name → Auto resolution downstream.
+            v.push((*rect, String::new()));
+        }
         TRUE
     }
-    let mut v: Vec<RECT> = Vec::new();
+    let mut v: Vec<(RECT, String)> = Vec::new();
     unsafe {
         let _ = EnumDisplayMonitors(None, None, Some(enum_proc), LPARAM(&mut v as *mut _ as isize));
     }
@@ -292,12 +303,16 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 if state.face.is_none() {
                     let mut rc = RECT::default();
                     let _ = GetClientRect(hwnd, &mut rc);
+                    let w = rc.right - rc.left;
+                    let h = rc.bottom - rc.top;
+                    let vertical = state.settings.effective_orientation(&state.device, w, h);
                     state.face = crate::clock::draw::FaceCache::new(
                         &rt,
                         &state.gfx,
-                        rc.right - rc.left,
-                        rc.bottom - rc.top,
-                        state.settings,
+                        w,
+                        h,
+                        &state.settings,
+                        vertical,
                         state.is_preview,
                     )
                     .ok();
@@ -360,7 +375,7 @@ pub fn run_fullscreen(settings: Settings) {
     unsafe {
         let instance: HINSTANCE = GetModuleHandleW(None).unwrap_or_default().into();
         register_class(instance);
-        for bounds in enumerate_monitors() {
+        for (bounds, device) in enumerate_monitors() {
             create_saver_window(
                 instance,
                 WS_POPUP,
@@ -376,6 +391,7 @@ pub fn run_fullscreen(settings: Settings) {
                     face: None,
                     // Impossible minute so the first paint always draws.
                     last_minute: 61,
+                    device,
                 },
             );
         }
@@ -421,6 +437,7 @@ pub fn run_preview(settings: Settings, parent: isize) {
                 target: None,
                 face: None,
                 last_minute: 61,
+                device: String::new(),
             },
         );
         let mut msg = MSG::default();

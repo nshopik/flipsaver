@@ -123,11 +123,10 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_COMMAND => match (wp.0 & 0xFFFF) as i32 {
             id if id == IDOK.0 => {
                 let pos = SendDlgItemMessageW(hwnd, IDC_SCALE, TBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
-                let s = Settings {
-                    display_24hr: IsDlgButtonChecked(hwnd, IDC_24H) == 1,
-                    scale: pos * 10,
-                };
-                let _ = settings::save(&settings::default_path(), s);
+                let mut s = settings::load(&settings::default_path());
+                s.display_24hr = IsDlgButtonChecked(hwnd, IDC_24H) == 1;
+                s.scale = pos * 10;
+                let _ = settings::save(&settings::default_path(), &s);
                 let _ = EndDialog(hwnd, 1);
                 1
             }
