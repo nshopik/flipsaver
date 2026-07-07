@@ -7,8 +7,31 @@ flip-clock screensaver for Windows — itself inspired by the original
 
 ![flipsaver flip clock](flipsaver.png)
 
-v0.1 ships the local flip clock on all monitors, live preview, and a
-minimal settings dialog (12/24 h, size). World times come later.
+The flip clock runs on all monitors, with live preview, flip
+animation, per-monitor orientation (horizontal/vertical/auto), and a
+minimal settings dialog (12/24 h, size).
+
+## World clocks
+
+Any monitor can show a split-flap departure board of world times
+instead of the clock: pick **World** for that screen in the settings
+dialog. Each row is a city and its local time, with AM/PM (12 h mode)
+and a day-of-week column when the zone's date differs from yours.
+
+Six cities are preloaded (Los Angeles, New York, London, Dubai, Tokyo,
+Sydney). Edit the `[WorldClocks]` section of `Settings.ini` to change
+them — one `Label=Windows timezone name` line per row, shown in file
+order:
+
+```ini
+[WorldClocks]
+Hanoi=SE Asia Standard Time
+Wellington=New Zealand Standard Time
+```
+
+Timezone names come from Windows (`tzutil /l` lists them); DST is
+handled automatically. The board has its own size slider in the
+settings dialog, independent of the clock size.
 
 ## Install
 
