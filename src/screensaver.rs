@@ -133,9 +133,17 @@ pub struct Anim {
     pub start_ms: u64,
 }
 
-/// A board cell's rendered glyph, with room for an in-flight flip (Task 8).
+/// A cell's in-flight flip: old glyph folding to new since start_ms.
+pub struct CellAnim {
+    pub from: char,
+    pub to: char,
+    pub start_ms: u64,
+}
+
+/// A board cell's rendered glyph, with room for an in-flight flip.
 pub struct CellState {
     pub glyph: char,
+    pub anim: Option<CellAnim>,
 }
 
 /// Per-window render mode, decided once at creation.
@@ -415,13 +423,15 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             *cache = crate::board::draw::BoardCache::new(&rt, &state.gfx, grid).ok();
                             if let Some(bc) = cache {
                                 let glyphs = board_cells(zones, &bc.grid, is_24h);
-                                *cells = glyphs.into_iter().map(|g| CellState { glyph: g }).collect();
+                                *cells = glyphs
+                                    .into_iter()
+                                    .map(|g| CellState { glyph: g, anim: None })
+                                    .collect();
                             }
                         }
                         match cache {
                             Some(bc) => {
-                                let glyphs: Vec<char> = cells.iter().map(|c| c.glyph).collect();
-                                let _ = crate::board::draw::draw_board(&rt, bc, &glyphs);
+                                let _ = crate::board::draw::draw_board(&rt, bc, cells, now);
                             }
                             None => {
                                 rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
@@ -484,13 +494,24 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             if let Some(bc) = cache {
                                 let is_24h = state.settings.display_24hr;
                                 let next = board_cells(zones, &bc.grid, is_24h);
-                                let changed = next
-                                    .iter()
-                                    .zip(cells.iter())
-                                    .any(|(g, c)| *g != c.glyph)
-                                    || next.len() != cells.len();
-                                if changed {
-                                    *cells = next.into_iter().map(|g| CellState { glyph: g }).collect();
+                                let old: Vec<char> = cells.iter().map(|c| c.glyph).collect();
+                                let changed = crate::board::diff_cells(&old, &next);
+                                if !changed.is_empty() {
+                                    if state.flip_enabled {
+                                        for &i in &changed {
+                                            cells[i].anim = Some(CellAnim {
+                                                from: cells[i].glyph,
+                                                to: next[i],
+                                                start_ms: now,
+                                            });
+                                        }
+                                        SetTimer(Some(hwnd), 2, 16, None);
+                                    }
+                                    // Settle the logical glyph regardless; a
+                                    // disabled flip just snaps on next paint.
+                                    for &i in &changed {
+                                        cells[i].glyph = next[i];
+                                    }
                                     let _ = InvalidateRect(Some(hwnd), None, false);
                                 }
                             }
@@ -500,23 +521,36 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 }
                 2 => {
                     // Fast tick: advance the fold; retire finished anims.
-                    // Only the clock ever starts timer 2 at this stage (the
-                    // board never starts it until Task 8's per-cell animation).
-                    if let Mode::Clock { hours_anim, minutes_anim, .. } = &mut state.mode {
-                        let done = |a: &Option<Anim>| {
-                            a.as_ref().map_or(true, |x| {
-                                now.saturating_sub(x.start_ms) as f64 / crate::clock::FLIP_MS >= 1.0
-                            })
-                        };
-                        if done(hours_anim) {
-                            *hours_anim = None;
+                    let mut any_active = false;
+                    match &mut state.mode {
+                        Mode::Clock { hours_anim, minutes_anim, .. } => {
+                            let done = |a: &Option<Anim>| {
+                                a.as_ref().map_or(true, |x| {
+                                    now.saturating_sub(x.start_ms) as f64 / crate::clock::FLIP_MS >= 1.0
+                                })
+                            };
+                            if done(hours_anim) {
+                                *hours_anim = None;
+                            }
+                            if done(minutes_anim) {
+                                *minutes_anim = None;
+                            }
+                            any_active = hours_anim.is_some() || minutes_anim.is_some();
                         }
-                        if done(minutes_anim) {
-                            *minutes_anim = None;
+                        Mode::Board { cells, .. } => {
+                            for c in cells.iter_mut() {
+                                if let Some(a) = &c.anim {
+                                    if now.saturating_sub(a.start_ms) as f64 / crate::clock::FLIP_MS >= 1.0 {
+                                        c.anim = None;
+                                    } else {
+                                        any_active = true;
+                                    }
+                                }
+                            }
                         }
-                        if hours_anim.is_none() && minutes_anim.is_none() {
-                            let _ = KillTimer(Some(hwnd), 2);
-                        }
+                    }
+                    if !any_active {
+                        let _ = KillTimer(Some(hwnd), 2);
                     }
                     let _ = InvalidateRect(Some(hwnd), None, false);
                     LRESULT(0)

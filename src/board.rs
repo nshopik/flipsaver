@@ -279,22 +279,66 @@ pub mod draw {
             }
             Ok(())
         }
+
+        /// A cell mid-flip: reuse the clock's fold geometry. `progress` in
+        /// [0,1); at >= 1 the caller draws the settled glyph instead.
+        pub(crate) unsafe fn draw_cell_fold(
+            &self,
+            rt: &ID2D1HwndRenderTarget,
+            col: usize,
+            row: usize,
+            old_glyph: char,
+            new_glyph: char,
+            progress: f64,
+        ) -> Result<()> {
+            let r = self.cell_rect(col, row);
+            let hinge = (r.top + r.bottom) / 2.0;
+            let shade_rect = self.rounded(r);
+            crate::clock::draw::fold_frame(
+                rt,
+                r,
+                hinge,
+                crate::clock::flip_frame(progress),
+                &self.shade,
+                &shade_rect,
+                &self.black,
+                1.0,
+                &|| self.draw_cell(rt, col, row, old_glyph),
+                &|| self.draw_cell(rt, col, row, new_glyph),
+            )
+        }
     }
 
-    /// Paint the whole board: black clear + every cell. `cells` is row-major,
-    /// `grid.rows * grid.cols` glyphs.
+    /// Paint the whole board. Cells with an active flip render the fold;
+    /// the rest draw their settled glyph. `now_ms` drives progress.
     pub fn draw_board(
         rt: &ID2D1HwndRenderTarget,
         cache: &BoardCache,
-        cells: &[char],
+        cells: &[crate::screensaver::CellState],
+        now_ms: u64,
     ) -> Result<()> {
         unsafe {
             rt.Clear(Some(&color(0x000000)));
             let cols = cache.grid.cols;
             for row in 0..cache.grid.rows {
                 for col in 0..cols {
-                    let g = cells.get(row * cols + col).copied().unwrap_or(' ');
-                    cache.draw_cell(rt, col, row, g)?;
+                    let idx = row * cols + col;
+                    let Some(cell) = cells.get(idx) else {
+                        cache.draw_cell(rt, col, row, ' ')?;
+                        continue;
+                    };
+                    match &cell.anim {
+                        Some(a) => {
+                            let progress =
+                                now_ms.saturating_sub(a.start_ms) as f64 / crate::clock::FLIP_MS;
+                            if progress >= 1.0 {
+                                cache.draw_cell(rt, col, row, a.to)?;
+                            } else {
+                                cache.draw_cell_fold(rt, col, row, a.from, a.to, progress)?;
+                            }
+                        }
+                        None => cache.draw_cell(rt, col, row, cell.glyph)?,
+                    }
                 }
             }
             Ok(())
