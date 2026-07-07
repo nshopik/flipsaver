@@ -1,7 +1,6 @@
 //! Windows timezone resolution and per-tick local-time conversion. Win32
 //! only; the DST decision defers to the host-tested board::dst_active.
 
-use windows::core::*;
 use windows::Win32::Foundation::{FILETIME, SYSTEMTIME, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
 use windows::Win32::System::Time::*;
 
