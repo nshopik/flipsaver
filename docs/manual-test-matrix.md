@@ -34,16 +34,15 @@ same machine.
 | 25 | Absent `FlipAnimation` key in old `Settings.ini` → animation on by default | |
 | 26 | `/c`: select World on a monitor, `/s` → that monitor shows the board, others the clock; persists across restarts (`Mode=1` under `[Screen <name>]`) | |
 | 27 | First dialog OK writes the six default cities to `[WorldClocks]`; hand-edit (reorder/add/remove) is honored, row order matches file order | |
-| 28 | Mixed DST zones: `*` only on rows whose zone is currently in DST (e.g. London summer yes, Dubai never) | |
-| 29 | Date-boundary zones (Sydney/LA vs local): day column (`WED`) shown only when the zone's date differs from local; correct across local midnight | |
-| 30 | 12/24 h setting applies to board rows (AM/PM cells only in 12 h) | |
-| 31 | Invalid timezone ID row renders city + `--:--`, logged via OutputDebugString; other rows unaffected | |
-| 32 | Empty `[WorldClocks]` section (all cities deleted) → World monitor falls back to the clock | |
-| 33 | Board minute tick flips only changed cells (fold animation); `FlipAnimation` off → instant swap | |
-| 34 | Board on single monitor, and preview (`/p`) when primary is World | |
-| 35 | No grid reflow at midnight or DST transition (day/`*` columns always reserved) | |
-| 36 | Non-ASCII city label (e.g. `Zürich`) renders; label > 16 chars truncated | |
-| 37 | "World size" slider resizes the board only (clock size unaffected); persists as `BoardScale`; absent key → 100% | |
+| 28 | Date-boundary zones (Sydney/LA vs local): day column (`WED`) shown only when the zone's date differs from local; correct across local midnight | |
+| 29 | 12/24 h setting applies to board rows (AM/PM cells only in 12 h) | |
+| 30 | Invalid timezone ID row renders city + `--:--`, logged via OutputDebugString; other rows unaffected | |
+| 31 | Empty `[WorldClocks]` section (all cities deleted) → World monitor falls back to the clock | |
+| 32 | Board minute tick flips only changed cells (fold animation); `FlipAnimation` off → instant swap | |
+| 33 | Board on single monitor, and preview (`/p`) when primary is World | |
+| 34 | No grid reflow at midnight (day column always reserved) | |
+| 35 | Non-ASCII city label (e.g. `Zürich`) renders; label > 16 chars truncated | |
+| 36 | "World size" slider resizes the board only (clock size unaffected); persists as `BoardScale`; absent key → 100% | |
 
 ## Fidelity (side-by-side vs FlipIt, same machine)
 

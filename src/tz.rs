@@ -1,7 +1,7 @@
 //! Windows timezone resolution and per-tick local-time conversion. Win32
-//! only; the DST decision defers to the host-tested board::dst_active.
+//! only.
 
-use windows::Win32::Foundation::{FILETIME, SYSTEMTIME, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+use windows::Win32::Foundation::{SYSTEMTIME, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
 use windows::Win32::System::Time::*;
 
 /// A configured city plus its resolved zone. `info == None` means the INI
@@ -51,30 +51,9 @@ pub fn resolve_all(world_clocks: &[(String, String)]) -> Vec<Zone> {
         .collect()
 }
 
-/// Applied UTC-minus-local bias in minutes, via FILETIME subtraction (robust
-/// across day boundaries, unlike field-wise SYSTEMTIME math).
-unsafe fn applied_bias(utc: &SYSTEMTIME, local: &SYSTEMTIME) -> Option<i32> {
-    let mut fu = FILETIME::default();
-    let mut fl = FILETIME::default();
-    SystemTimeToFileTime(utc, &mut fu).ok()?;
-    SystemTimeToFileTime(local, &mut fl).ok()?;
-    let u = ((fu.dwHighDateTime as i64) << 32) | fu.dwLowDateTime as i64;
-    let l = ((fl.dwHighDateTime as i64) << 32) | fl.dwLowDateTime as i64;
-    // 100 ns units -> minutes.
-    Some(((u - l) / 600_000_000) as i32)
-}
-
-/// Standard-season bias for `year` (Bias + StandardBias). The zone's *local*
-/// year is used because UTC and local year can differ around New Year.
-unsafe fn standard_bias(info: &DYNAMIC_TIME_ZONE_INFORMATION, year: u16) -> Option<i32> {
-    let mut tzi = TIME_ZONE_INFORMATION::default();
-    GetTimeZoneInformationForYear(year, Some(info), &mut tzi).ok()?;
-    Some(tzi.Bias + tzi.StandardBias)
-}
-
-/// Convert `utc` to this zone's local time, deriving the DST flag and the
-/// date-differs flag (vs the machine-local `local_now`). Returns None if the
-/// Win32 conversion fails.
+/// Convert `utc` to this zone's local time, deriving the date-differs flag
+/// (vs the machine-local `local_now`). Returns None if the Win32 conversion
+/// fails.
 pub fn zone_time(
     info: &DYNAMIC_TIME_ZONE_INFORMATION,
     utc: &SYSTEMTIME,
@@ -83,14 +62,11 @@ pub fn zone_time(
     unsafe {
         let mut local = SYSTEMTIME::default();
         SystemTimeToTzSpecificLocalTimeEx(Some(info), utc, &mut local).ok()?;
-        let applied = applied_bias(utc, &local)?;
-        let standard = standard_bias(info, local.wYear)?;
         let date_differs = (local.wYear, local.wMonth, local.wDay)
             != (local_now.wYear, local_now.wMonth, local_now.wDay);
         Some(crate::board::TimeParts {
             hour: local.wHour as u32,
             minute: local.wMinute as u32,
-            is_dst: crate::board::dst_active(applied, standard),
             date_differs,
             weekday: local.wDayOfWeek as u8,
         })

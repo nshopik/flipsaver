@@ -11,7 +11,6 @@ pub const LABEL_CELLS: usize = 16;
 pub struct TimeParts {
     pub hour: u32,
     pub minute: u32,
-    pub is_dst: bool,
     pub date_differs: bool,
     pub weekday: u8,
 }
@@ -28,14 +27,14 @@ pub struct Grid {
 /// One breathing row top and bottom so the block never touches the edges.
 const MARGIN_ROWS: i32 = 2;
 
-/// Right-hand block width: time(5) + gap + [AM/PM(2) + gap] + day(3) + gap
-/// + dst(1). All fields reserved unconditionally so the grid never reflows
-/// at midnight or a DST transition.
+/// Right-hand block width: time(5) + gap + [AM/PM(2) + gap] + day(3).
+/// All fields reserved unconditionally so the grid never reflows at
+/// midnight.
 fn right_block_width(is_24h: bool) -> usize {
     if is_24h {
-        5 + 1 + 3 + 1 + 1
+        5 + 1 + 3
     } else {
-        5 + 1 + 2 + 1 + 3 + 1 + 1
+        5 + 1 + 2 + 1 + 3
     }
 }
 
@@ -55,13 +54,6 @@ pub fn weekday_abbr(dow: u8) -> &'static str {
         6 => "SAT",
         _ => "???",
     }
-}
-
-/// A zone is in DST when the actually-applied bias differs from its
-/// standard-season bias (both UTC-minus-local minutes, Win32 sign). Kept
-/// pure so it tests without Win32; the biases are derived in `tz.rs`.
-pub fn dst_active(actual_bias: i32, standard_bias: i32) -> bool {
-    actual_bias != standard_bias
 }
 
 /// The changed cell indices between two equal-length rows. City-name cells
@@ -131,12 +123,6 @@ pub fn format_row(label: &str, time: Option<TimeParts>, is_24h: bool) -> Vec<cha
         _ => "",
     };
     push_str_field(&mut row, day, 3, false);
-    row.push(' ');
-    let dst = match time {
-        Some(t) if t.is_dst => "*",
-        _ => "",
-    };
-    push_str_field(&mut row, dst, 1, false);
     debug_assert_eq!(row.len(), row_width(is_24h));
     row
 }
@@ -359,39 +345,39 @@ mod tests {
 
     #[test]
     fn row_width_reserves_all_fields() {
-        assert_eq!(row_width(false), 16 + 1 + (5 + 1 + 2 + 1 + 3 + 1 + 1)); // 31
-        assert_eq!(row_width(true), 16 + 1 + (5 + 1 + 3 + 1 + 1)); // 28
+        assert_eq!(row_width(false), 16 + 1 + (5 + 1 + 2 + 1 + 3)); // 29
+        assert_eq!(row_width(true), 16 + 1 + (5 + 1 + 3)); // 26
     }
 
     #[test]
-    fn format_12h_pm_no_dst_same_date() {
-        let t = TimeParts { hour: 15, minute: 7, is_dst: false, date_differs: false, weekday: 3 };
+    fn format_12h_pm_same_date() {
+        let t = TimeParts { hour: 15, minute: 7, date_differs: false, weekday: 3 };
         let row = format_row("Los Angeles", Some(t), false);
         assert_eq!(row.len(), row_width(false));
         // "LOS ANGELES" (11) padded to 16, gap, " 3:07" right-just in 5,
-        // gap, "PM", gap, blank day (3), gap, blank dst (1).
-        assert_eq!(s(&row), "LOS ANGELES       3:07 PM      ");
+        // gap, "PM", gap, blank day (3).
+        assert_eq!(s(&row), "LOS ANGELES       3:07 PM    ");
     }
 
     #[test]
-    fn format_12h_am_dst_and_day_shown() {
-        let t = TimeParts { hour: 0, minute: 5, is_dst: true, date_differs: true, weekday: 3 };
+    fn format_12h_am_day_shown() {
+        let t = TimeParts { hour: 0, minute: 5, date_differs: true, weekday: 3 };
         let row = format_row("Tokyo", Some(t), false);
-        assert_eq!(s(&row), "TOKYO            12:05 AM WED *");
+        assert_eq!(s(&row), "TOKYO            12:05 AM WED");
     }
 
     #[test]
     fn format_24h_has_no_ampm_column() {
-        let t = TimeParts { hour: 9, minute: 4, is_dst: false, date_differs: false, weekday: 1 };
+        let t = TimeParts { hour: 9, minute: 4, date_differs: false, weekday: 1 };
         let row = format_row("London", Some(t), true);
         assert_eq!(row.len(), row_width(true));
-        assert_eq!(s(&row), "LONDON           09:04      ");
+        assert_eq!(s(&row), "LONDON           09:04    ");
     }
 
     #[test]
     fn day_only_shown_when_date_differs() {
-        let same = TimeParts { hour: 9, minute: 0, is_dst: false, date_differs: false, weekday: 2 };
-        let diff = TimeParts { hour: 9, minute: 0, is_dst: false, date_differs: true, weekday: 2 };
+        let same = TimeParts { hour: 9, minute: 0, date_differs: false, weekday: 2 };
+        let diff = TimeParts { hour: 9, minute: 0, date_differs: true, weekday: 2 };
         assert!(!s(&format_row("X", Some(same), true)).contains("TUE"));
         assert!(s(&format_row("X", Some(diff), true)).contains("TUE"));
     }
@@ -400,21 +386,15 @@ mod tests {
     fn unresolved_zone_renders_dashes() {
         let row = format_row("Nowhere", None, false);
         assert_eq!(row.len(), row_width(false));
-        assert_eq!(s(&row), "NOWHERE          --:--         ");
+        assert_eq!(s(&row), "NOWHERE          --:--       ");
     }
 
     #[test]
     fn label_truncates_and_uppercases() {
-        let t = TimeParts { hour: 1, minute: 0, is_dst: false, date_differs: false, weekday: 0 };
+        let t = TimeParts { hour: 1, minute: 0, date_differs: false, weekday: 0 };
         let row = format_row("an extremely long name", Some(t), true);
         let label: String = row[..LABEL_CELLS].iter().collect();
         assert_eq!(label, "AN EXTREMELY LON");
-    }
-
-    #[test]
-    fn dst_active_compares_bias() {
-        assert!(dst_active(-420, -480)); // PDT vs PST
-        assert!(!dst_active(-480, -480));
     }
 
     #[test]
@@ -433,14 +413,14 @@ mod tests {
 
     #[test]
     fn grid_fits_and_centers() {
-        // 6 cities, 24h (28 cols). scale 100 for an exact check.
+        // 6 cities, 24h (26 cols). scale 100 for an exact check.
         let g = compute_grid(1920, 1080, 100, 6, true);
-        assert_eq!(g.cols, 28);
+        assert_eq!(g.cols, 26);
         assert_eq!(g.rows, 6);
-        // by_w = 1920/28 = 68; by_h = 1080/8 = 135; min = 68.
+        // by_w = 1920/26 = 73; by_h = 1080/8 = 135; min = 73.
         // scale 100 -> full fit, edge to edge.
-        assert_eq!(g.cell, 68);
-        assert_eq!(g.origin_x, (1920 - 28 * g.cell) / 2);
+        assert_eq!(g.cell, 73);
+        assert_eq!(g.origin_x, (1920 - 26 * g.cell) / 2);
         assert_eq!(g.origin_y, (1080 - 6 * g.cell) / 2);
     }
 
@@ -455,7 +435,7 @@ mod tests {
     #[test]
     fn grid_scale_zero_keeps_half_floor() {
         // Slider 0 -> 50% of the full fit (each notch +5%) — not 1px.
-        let base = 1920 / 28; // horizontal fit wins at 1080p
+        let base = 1920 / 26; // horizontal fit wins at 1080p
         let g = compute_grid(1920, 1080, 0, 6, true);
         assert_eq!(g.cell, base * 50 / 100);
     }
