@@ -119,7 +119,7 @@ pub fn font_display_name() -> &'static str {
     }
 }
 
-fn debug_log(line: &str) {
+pub fn debug_log(line: &str) {
     let wide: Vec<u16> = line.encode_utf16().chain([0]).collect();
     unsafe {
         windows::Win32::System::Diagnostics::Debug::OutputDebugStringW(PCWSTR(wide.as_ptr()));
@@ -133,27 +133,91 @@ pub struct Anim {
     pub start_ms: u64,
 }
 
+/// A board cell's rendered glyph, with room for an in-flight flip (Task 8).
+pub struct CellState {
+    pub glyph: char,
+}
+
+/// Per-window render mode, decided once at creation.
+pub enum Mode {
+    Clock {
+        cache: Option<crate::clock::draw::FaceCache>,
+        /// (61,61) is the not-yet-primed sentinel.
+        shown: (u32, u32),
+        hours_anim: Option<Anim>,
+        minutes_anim: Option<Anim>,
+    },
+    Board {
+        zones: Vec<crate::tz::Zone>,
+        cache: Option<crate::board::draw::BoardCache>,
+        cells: Vec<CellState>,
+    },
+}
+
 pub struct WindowState {
     pub is_preview: bool,
     pub mouse: Option<(i32, i32)>,
     pub settings: Settings,
     pub gfx: std::rc::Rc<Gfx>,
     pub target: Option<ID2D1HwndRenderTarget>,
-    pub face: Option<crate::clock::draw::FaceCache>,
-    /// Single source of truth for the rendered time. (61, 61) is the
-    /// not-yet-primed sentinel; first WM_PAINT overwrites it with real time.
-    pub shown: (u32, u32),
-    pub hours_anim: Option<Anim>,
-    pub minutes_anim: Option<Anim>,
     pub flip_enabled: bool,
     pub device: String,
+    pub mode: Mode,
 }
 
-/// Current local hour/minute, used both to paint and to decide whether a
-/// WM_TIMER tick needs a repaint.
-fn local_hm() -> (u32, u32) {
-    let st = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
-    (st.wHour as u32, st.wMinute as u32)
+/// Machine-local full SYSTEMTIME (for hour/minute, date-differs and the UTC
+/// used by tz conversion).
+fn local_now() -> SYSTEMTIME {
+    unsafe { windows::Win32::System::SystemInformation::GetLocalTime() }
+}
+
+/// Current row-major glyph grid for a board, from its resolved zones. One
+/// GetSystemTime feeds every zone. Unresolved zones render as `--:--`.
+fn board_cells(zones: &[crate::tz::Zone], grid: &crate::board::Grid, is_24h: bool) -> Vec<char> {
+    let utc = unsafe { windows::Win32::System::SystemInformation::GetSystemTime() };
+    let now = local_now();
+    let mut cells: Vec<char> = Vec::with_capacity(grid.rows * grid.cols);
+    for zone in zones.iter().take(grid.rows) {
+        let parts = zone
+            .info
+            .as_ref()
+            .and_then(|info| crate::tz::zone_time(info, &utc, &now));
+        let row = crate::board::format_row(&zone.label, parts, is_24h);
+        // format_row already returns exactly grid.cols chars.
+        cells.extend(row);
+    }
+    cells
+}
+
+/// Choose the render mode for a window. World mode needs at least one
+/// resolvable zone; otherwise (empty list or all invalid) fall back to the
+/// clock, decided once here.
+fn make_mode(settings: &Settings, device: &str) -> Mode {
+    use crate::settings::Mode as SettingsMode;
+    if settings.screen_mode(device) == SettingsMode::World {
+        let zones = crate::tz::resolve_all(&settings.world_clocks);
+        if zones.iter().any(|z| z.info.is_some()) {
+            return Mode::Board { zones, cache: None, cells: Vec::new() };
+        }
+        debug_log("flipsaver: no resolvable zones, falling back to clock");
+    }
+    Mode::Clock { cache: None, shown: (61, 61), hours_anim: None, minutes_anim: None }
+}
+
+/// Drop device-dependent caches and abandon any in-flight animation, keeping
+/// the mode and (for a board) its resolved zones.
+fn reset_caches(state: &mut WindowState) {
+    match &mut state.mode {
+        Mode::Clock { cache, hours_anim, minutes_anim, .. } => {
+            *cache = None;
+            *hours_anim = None;
+            *minutes_anim = None;
+        }
+        Mode::Board { cache, cells, .. } => {
+            *cache = None;
+            cells.clear();
+        }
+    }
 }
 
 unsafe fn ensure_target(hwnd: HWND, state: &mut WindowState) -> Option<ID2D1HwndRenderTarget> {
@@ -312,57 +376,65 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             let mut ps = PAINTSTRUCT::default();
             let _ = BeginPaint(hwnd, &mut ps);
             if let Some(rt) = ensure_target(hwnd, state) {
-                if state.face.is_none() {
-                    let mut rc = RECT::default();
-                    let _ = GetClientRect(hwnd, &mut rc);
-                    let w = rc.right - rc.left;
-                    let h = rc.bottom - rc.top;
-                    let vertical = state.settings.effective_orientation(&state.device, w, h);
-                    state.face = crate::clock::draw::FaceCache::new(
-                        &rt,
-                        &state.gfx,
-                        w,
-                        h,
-                        &state.settings,
-                        vertical,
-                        state.is_preview,
-                    )
-                    .ok();
-                }
+                let mut rc = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rc);
+                let w = rc.right - rc.left;
+                let h = rc.bottom - rc.top;
                 rt.BeginDraw();
-                let draw_ok = match &state.face {
-                    Some(face) => {
-                        // Prime once: seed shown to real time so the first
-                        // slow tick doesn't diff against the sentinel and
-                        // fire a spurious startup flip.
-                        if state.shown == (61, 61) {
-                            state.shown = local_hm();
+                let now = windows::Win32::System::SystemInformation::GetTickCount64();
+                let is_24h = state.settings.display_24hr;
+                match &mut state.mode {
+                    Mode::Clock { cache, shown, hours_anim, minutes_anim } => {
+                        if cache.is_none() {
+                            let vertical = state.settings.effective_orientation(&state.device, w, h);
+                            *cache = crate::clock::draw::FaceCache::new(
+                                &rt, &state.gfx, w, h, &state.settings, vertical, state.is_preview,
+                            )
+                            .ok();
                         }
-                        let now = windows::Win32::System::SystemInformation::GetTickCount64();
-                        crate::clock::draw::draw_face(
-                            &rt,
-                            face,
-                            state.shown,
-                            state.hours_anim.as_ref(),
-                            state.minutes_anim.as_ref(),
-                            now,
-                        )
-                        .is_ok()
+                        match cache {
+                            Some(face) => {
+                                if *shown == (61, 61) {
+                                    let st = local_now();
+                                    *shown = (st.wHour as u32, st.wMinute as u32);
+                                }
+                                let _ = crate::clock::draw::draw_face(
+                                    &rt, face, *shown, hours_anim.as_ref(), minutes_anim.as_ref(), now,
+                                );
+                            }
+                            None => {
+                                rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
+                            }
+                        }
                     }
-                    None => {
-                        rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
-                        true
+                    Mode::Board { zones, cache, cells } => {
+                        if cache.is_none() {
+                            let grid = crate::board::compute_grid(
+                                w, h, state.settings.scale, zones.len(), is_24h,
+                            );
+                            *cache = crate::board::draw::BoardCache::new(&rt, &state.gfx, grid).ok();
+                            if let Some(bc) = cache {
+                                let glyphs = board_cells(zones, &bc.grid, is_24h);
+                                *cells = glyphs.into_iter().map(|g| CellState { glyph: g }).collect();
+                            }
+                        }
+                        match cache {
+                            Some(bc) => {
+                                let glyphs: Vec<char> = cells.iter().map(|c| c.glyph).collect();
+                                let _ = crate::board::draw::draw_board(&rt, bc, &glyphs);
+                            }
+                            None => {
+                                rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
+                            }
+                        }
                     }
-                };
-                let _ = draw_ok;
+                }
                 if let Err(e) = rt.EndDraw(None, None) {
                     if e.code() == D2DERR_RECREATE_TARGET {
-                        // Device lost: rebuild target/resources AND abandon any
-                        // half-played fold so the rebuilt face settles static.
+                        // Device lost: drop the target and this window's cache;
+                        // next paint rebuilds. Also abandon any half-played fold.
                         state.target = None;
-                        state.face = None;
-                        state.hours_anim = None;
-                        state.minutes_anim = None;
+                        reset_caches(state);
                         let _ = KillTimer(Some(hwnd), 2);
                         let _ = InvalidateRect(Some(hwnd), None, false);
                     }
@@ -378,7 +450,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             // repaint. Mixed-DPI is otherwise handled by per-monitor-V2
             // physical sizing (target stays at 96 DPI, see ensure_target).
             state.target = None;
-            state.face = None;
+            reset_caches(state);
             let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }
@@ -386,46 +458,65 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             let now = windows::Win32::System::SystemInformation::GetTickCount64();
             match wp.0 {
                 1 => {
-                    // Slow tick: detect a value change against `shown`.
-                    let (h, m) = local_hm();
-                    let primed = state.shown != (61, 61);
-                    let mut started = false;
-                    if primed && h != state.shown.0 && state.flip_enabled {
-                        state.hours_anim = Some(Anim { from: state.shown.0, to: h, start_ms: now });
-                        started = true;
-                    }
-                    if primed && m != state.shown.1 && state.flip_enabled {
-                        state.minutes_anim = Some(Anim { from: state.shown.1, to: m, start_ms: now });
-                        started = true;
-                    }
-                    if (h, m) != state.shown {
-                        // shown advances whether or not we animate, so the next
-                        // tick won't re-detect the same diff; a disabled flip
-                        // just snaps (no anim, renderer draws shown).
-                        state.shown = (h, m);
-                        if started {
-                            // SetTimer returning 0 => box snaps next tick, no crash.
-                            SetTimer(Some(hwnd), 2, 16, None);
+                    match &mut state.mode {
+                        Mode::Clock { shown, hours_anim, minutes_anim, .. } => {
+                            let st = local_now();
+                            let (h, m) = (st.wHour as u32, st.wMinute as u32);
+                            let primed = *shown != (61, 61);
+                            let mut started = false;
+                            if primed && h != shown.0 && state.flip_enabled {
+                                *hours_anim = Some(Anim { from: shown.0, to: h, start_ms: now });
+                                started = true;
+                            }
+                            if primed && m != shown.1 && state.flip_enabled {
+                                *minutes_anim = Some(Anim { from: shown.1, to: m, start_ms: now });
+                                started = true;
+                            }
+                            if (h, m) != *shown {
+                                *shown = (h, m);
+                                if started {
+                                    SetTimer(Some(hwnd), 2, 16, None);
+                                }
+                                let _ = InvalidateRect(Some(hwnd), None, false);
+                            }
                         }
-                        let _ = InvalidateRect(Some(hwnd), None, false);
+                        Mode::Board { zones, cache, cells } => {
+                            if let Some(bc) = cache {
+                                let is_24h = state.settings.display_24hr;
+                                let next = board_cells(zones, &bc.grid, is_24h);
+                                let changed = next
+                                    .iter()
+                                    .zip(cells.iter())
+                                    .any(|(g, c)| *g != c.glyph)
+                                    || next.len() != cells.len();
+                                if changed {
+                                    *cells = next.into_iter().map(|g| CellState { glyph: g }).collect();
+                                    let _ = InvalidateRect(Some(hwnd), None, false);
+                                }
+                            }
+                        }
                     }
                     LRESULT(0)
                 }
                 2 => {
                     // Fast tick: advance the fold; retire finished anims.
-                    let done = |a: &Option<Anim>| {
-                        a.as_ref().map_or(true, |x| {
-                            now.saturating_sub(x.start_ms) as f64 / crate::clock::FLIP_MS >= 1.0
-                        })
-                    };
-                    if done(&state.hours_anim) {
-                        state.hours_anim = None;
-                    }
-                    if done(&state.minutes_anim) {
-                        state.minutes_anim = None;
-                    }
-                    if state.hours_anim.is_none() && state.minutes_anim.is_none() {
-                        let _ = KillTimer(Some(hwnd), 2);
+                    // Only the clock ever starts timer 2 at this stage (the
+                    // board never starts it until Task 8's per-cell animation).
+                    if let Mode::Clock { hours_anim, minutes_anim, .. } = &mut state.mode {
+                        let done = |a: &Option<Anim>| {
+                            a.as_ref().map_or(true, |x| {
+                                now.saturating_sub(x.start_ms) as f64 / crate::clock::FLIP_MS >= 1.0
+                            })
+                        };
+                        if done(hours_anim) {
+                            *hours_anim = None;
+                        }
+                        if done(minutes_anim) {
+                            *minutes_anim = None;
+                        }
+                        if hours_anim.is_none() && minutes_anim.is_none() {
+                            let _ = KillTimer(Some(hwnd), 2);
+                        }
                     }
                     let _ = InvalidateRect(Some(hwnd), None, false);
                     LRESULT(0)
@@ -459,10 +550,7 @@ pub fn run_fullscreen(settings: Settings) {
                     settings: settings.clone(),
                     gfx: gfx.clone(),
                     target: None,
-                    face: None,
-                    shown: (61, 61),
-                    hours_anim: None,
-                    minutes_anim: None,
+                    mode: make_mode(&settings, &device),
                     device,
                 },
             );
@@ -508,12 +596,9 @@ pub fn run_preview(settings: Settings, parent: isize) {
                 settings,
                 gfx,
                 target: None,
-                face: None,
-                shown: (61, 61),
-                hours_anim: None,
-                minutes_anim: None,
                 flip_enabled,
                 device: String::new(),
+                mode: Mode::Clock { cache: None, shown: (61, 61), hours_anim: None, minutes_anim: None },
             },
         );
         let mut msg = MSG::default();
