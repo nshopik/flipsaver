@@ -29,12 +29,67 @@ impl Orientation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Clock,
+    World,
+}
+
+impl Mode {
+    /// Anything other than 1 is Clock — lenient, like Orientation::from_ini.
+    pub fn from_ini(v: i32) -> Mode {
+        match v {
+            1 => Mode::World,
+            _ => Mode::Clock,
+        }
+    }
+
+    pub fn to_ini(self) -> i32 {
+        match self {
+            Mode::Clock => 0,
+            Mode::World => 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenSettings {
+    pub orientation: Orientation,
+    pub mode: Mode,
+}
+
+impl Default for ScreenSettings {
+    fn default() -> Self {
+        ScreenSettings { orientation: Orientation::Auto, mode: Mode::Clock }
+    }
+}
+
+/// City labels never exceed this many cells (grid is one char per cell).
+pub const LABEL_MAX: usize = 16;
+
+fn default_world_clocks() -> Vec<(String, String)> {
+    [
+        ("Los Angeles", "Pacific Standard Time"),
+        ("New York", "Eastern Standard Time"),
+        ("London", "GMT Standard Time"),
+        ("Dubai", "Arabian Standard Time"),
+        ("Tokyo", "Tokyo Standard Time"),
+        ("Sydney", "AUS Eastern Standard Time"),
+    ]
+    .iter()
+    .map(|(c, z)| (c.to_string(), z.to_string()))
+    .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub display_24hr: bool,
     pub scale: i32, // 0..=100, slider value x 10
     pub flip_animation: bool,
-    pub screens: BTreeMap<String, Orientation>,
+    pub screens: BTreeMap<String, ScreenSettings>,
+    /// City -> Windows timezone key. A Vec (not a map): row order is the
+    /// user's chosen display order.
+    pub world_clocks: Vec<(String, String)>,
 }
 
 impl Default for Settings {
@@ -44,6 +99,7 @@ impl Default for Settings {
             scale: DEFAULT_SCALE,
             flip_animation: true,
             screens: BTreeMap::new(),
+            world_clocks: default_world_clocks(),
         }
     }
 }
@@ -52,6 +108,9 @@ impl Settings {
     pub fn from_ini_text(text: &str) -> Settings {
         let mut s = Settings::default();
         let mut section = String::new();
+        // The preloaded defaults are cleared the first time a [WorldClocks]
+        // header appears, so a present-but-empty section = "no cities".
+        let mut world_cleared = false;
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() {
@@ -59,6 +118,10 @@ impl Settings {
             }
             if line.starts_with('[') && line.ends_with(']') {
                 section = line[1..line.len() - 1].to_string();
+                if section == "WorldClocks" && !world_cleared {
+                    s.world_clocks.clear();
+                    world_cleared = true;
+                }
                 continue;
             }
             // A line without '=' is the original's only comment mechanism.
@@ -82,10 +145,23 @@ impl Settings {
                     _ => {}
                 }
             } else if let Some(name) = section.strip_prefix("Screen ") {
-                if key == "Orientation" {
-                    let v = value.trim().parse::<i32>().unwrap_or(0);
-                    s.screens.insert(name.to_string(), Orientation::from_ini(v));
+                let entry = s.screens.entry(name.to_string()).or_default();
+                match key {
+                    "Orientation" => {
+                        let v = value.trim().parse::<i32>().unwrap_or(0);
+                        entry.orientation = Orientation::from_ini(v);
+                    }
+                    "Mode" => {
+                        let v = value.trim().parse::<i32>().unwrap_or(0);
+                        entry.mode = Mode::from_ini(v);
+                    }
+                    _ => {}
                 }
+            } else if section == "WorldClocks" {
+                // key = label, value = Windows timezone key name. Labels cap
+                // at LABEL_MAX cells; order preserved as written.
+                let label: String = key.trim().chars().take(LABEL_MAX).collect();
+                s.world_clocks.push((label, value.trim().to_string()));
             }
         }
         s
@@ -98,16 +174,25 @@ impl Settings {
             self.scale,
             if self.flip_animation { 1 } else { 0 },
         );
-        for (name, orient) in &self.screens {
-            if *orient == Orientation::Auto {
+        for (name, sc) in &self.screens {
+            // Write a section only when it carries a non-default; then always
+            // write both keys so the file is self-describing.
+            if sc.orientation == Orientation::Auto && sc.mode == Mode::Clock {
                 continue;
             }
             out.push_str(&format!(
-                "[Screen {}]\r\nOrientation={}\r\n\r\n",
+                "[Screen {}]\r\nOrientation={}\r\nMode={}\r\n\r\n",
                 name,
-                orient.to_ini()
+                sc.orientation.to_ini(),
+                sc.mode.to_ini(),
             ));
         }
+        // Always emit the header; an empty body round-trips to "no cities".
+        out.push_str("[WorldClocks]\r\n");
+        for (label, zone) in &self.world_clocks {
+            out.push_str(&format!("{}={}\r\n", label, zone));
+        }
+        out.push_str("\r\n");
         out
     }
 
@@ -115,11 +200,16 @@ impl Settings {
     /// an absent monitor falls back to aspect (portrait → vertical).
     /// Returns `true` for vertical.
     pub fn effective_orientation(&self, device: &str, width: i32, height: i32) -> bool {
-        match self.screens.get(device) {
+        match self.screens.get(device).map(|s| s.orientation) {
             Some(Orientation::Horizontal) => false,
             Some(Orientation::Vertical) => true,
             _ => height > width,
         }
+    }
+
+    /// Configured display mode for a monitor; absent -> Clock.
+    pub fn screen_mode(&self, device: &str) -> Mode {
+        self.screens.get(device).map(|s| s.mode).unwrap_or(Mode::Clock)
     }
 }
 
@@ -215,6 +305,7 @@ mod tests {
             scale: 90,
             flip_animation: true,
             screens: std::collections::BTreeMap::new(),
+            world_clocks: Vec::new(),
         };
         assert_eq!(Settings::from_ini_text(&s.to_ini_text()), s);
     }
@@ -236,6 +327,7 @@ mod tests {
             scale: 20,
             flip_animation: true,
             screens: std::collections::BTreeMap::new(),
+            world_clocks: Vec::new(),
         };
         save(&path, &s).unwrap();
         assert_eq!(load(&path), s);
@@ -247,25 +339,44 @@ mod tests {
         let s = Settings::from_ini_text(
             "[General]\nScale=70\n[Screen DISPLAY1]\nOrientation=2\n",
         );
-        assert_eq!(s.screens.get("DISPLAY1"), Some(&Orientation::Vertical));
+        assert_eq!(s.screens.get("DISPLAY1").map(|c| c.orientation), Some(Orientation::Vertical));
+        assert_eq!(s.screens.get("DISPLAY1").map(|c| c.mode), Some(Mode::Clock));
     }
 
     #[test]
     fn screen_garbage_orientation_is_auto() {
         let s = Settings::from_ini_text("[Screen DISPLAY1]\nOrientation=abc\n");
-        assert_eq!(s.screens.get("DISPLAY1"), Some(&Orientation::Auto));
+        assert_eq!(s.screens.get("DISPLAY1").map(|c| c.orientation), Some(Orientation::Auto));
         let s = Settings::from_ini_text("[Screen DISPLAY1]\nOrientation=9\n");
-        assert_eq!(s.screens.get("DISPLAY1"), Some(&Orientation::Auto));
+        assert_eq!(s.screens.get("DISPLAY1").map(|c| c.orientation), Some(Orientation::Auto));
     }
 
     #[test]
-    fn auto_screens_are_omitted_on_save() {
+    fn effective_orientation_explicit_wins() {
         let mut s = Settings::default();
-        s.screens.insert("DISPLAY1".into(), Orientation::Auto);
-        s.screens.insert("DISPLAY2".into(), Orientation::Vertical);
+        s.screens.insert("DISPLAY1".into(), ScreenSettings { orientation: Orientation::Vertical, mode: Mode::Clock });
+        assert!(s.effective_orientation("DISPLAY1", 1920, 1080));
+        s.screens.insert("DISPLAY1".into(), ScreenSettings { orientation: Orientation::Horizontal, mode: Mode::Clock });
+        assert!(!s.effective_orientation("DISPLAY1", 1080, 1920));
+    }
+
+    #[test]
+    fn effective_orientation_auto_by_aspect() {
+        let s = Settings::default();
+        assert!(s.effective_orientation("DISPLAY1", 1080, 1920));
+        assert!(!s.effective_orientation("DISPLAY1", 1920, 1080));
+    }
+
+    #[test]
+    fn screen_section_omitted_only_when_auto_and_clock() {
+        let mut s = Settings::default();
+        s.screens.insert("DISPLAY1".into(), ScreenSettings { orientation: Orientation::Auto, mode: Mode::Clock });
+        s.screens.insert("DISPLAY2".into(), ScreenSettings { orientation: Orientation::Vertical, mode: Mode::Clock });
+        s.screens.insert("DISPLAY3".into(), ScreenSettings { orientation: Orientation::Auto, mode: Mode::World });
         let text = s.to_ini_text();
         assert!(!text.contains("[Screen DISPLAY1]"));
-        assert!(text.contains("[Screen DISPLAY2]\r\nOrientation=2"));
+        assert!(text.contains("[Screen DISPLAY2]\r\nOrientation=2\r\nMode=0"));
+        assert!(text.contains("[Screen DISPLAY3]\r\nOrientation=0\r\nMode=1"));
     }
 
     #[test]
@@ -275,26 +386,72 @@ mod tests {
             scale: 40,
             flip_animation: true,
             screens: std::collections::BTreeMap::new(),
+            world_clocks: Vec::new(),
         };
-        s.screens.insert("DISPLAY1".into(), Orientation::Horizontal);
-        // A monitor not currently attached must survive a save.
-        s.screens.insert("DISPLAY9".into(), Orientation::Vertical);
+        s.screens.insert("DISPLAY1".into(), ScreenSettings { orientation: Orientation::Horizontal, mode: Mode::Clock });
+        s.screens.insert("DISPLAY9".into(), ScreenSettings { orientation: Orientation::Auto, mode: Mode::World });
         assert_eq!(Settings::from_ini_text(&s.to_ini_text()), s);
     }
 
     #[test]
-    fn effective_orientation_explicit_wins() {
-        let mut s = Settings::default();
-        s.screens.insert("DISPLAY1".into(), Orientation::Vertical);
-        assert!(s.effective_orientation("DISPLAY1", 1920, 1080));
-        s.screens.insert("DISPLAY1".into(), Orientation::Horizontal);
-        assert!(!s.effective_orientation("DISPLAY1", 1080, 1920));
+    fn mode_parses_and_defaults_to_clock() {
+        let s = Settings::from_ini_text("[Screen D1]\nMode=1\n");
+        assert_eq!(s.screens.get("D1").map(|c| c.mode), Some(Mode::World));
+        // unknown mode value -> clock
+        let s = Settings::from_ini_text("[Screen D1]\nMode=7\n");
+        assert_eq!(s.screens.get("D1").map(|c| c.mode), Some(Mode::Clock));
+        // orientation present, mode absent -> clock
+        let s = Settings::from_ini_text("[Screen D1]\nOrientation=1\n");
+        assert_eq!(s.screens.get("D1").map(|c| c.mode), Some(Mode::Clock));
     }
 
     #[test]
-    fn effective_orientation_auto_by_aspect() {
+    fn default_world_clocks_preloaded() {
         let s = Settings::default();
-        assert!(s.effective_orientation("DISPLAY1", 1080, 1920));
-        assert!(!s.effective_orientation("DISPLAY1", 1920, 1080));
+        assert_eq!(s.world_clocks.len(), 6);
+        assert_eq!(s.world_clocks[0], ("Los Angeles".to_string(), "Pacific Standard Time".to_string()));
+        assert_eq!(s.world_clocks[5], ("Sydney".to_string(), "AUS Eastern Standard Time".to_string()));
+    }
+
+    #[test]
+    fn absent_worldclocks_section_keeps_defaults() {
+        let s = Settings::from_ini_text("[General]\nScale=70\n");
+        assert_eq!(s.world_clocks.len(), 6);
+    }
+
+    #[test]
+    fn present_empty_worldclocks_section_means_none() {
+        let s = Settings::from_ini_text("[General]\nScale=70\n[WorldClocks]\n");
+        assert!(s.world_clocks.is_empty());
+    }
+
+    #[test]
+    fn worldclocks_preserve_order_and_truncate_labels() {
+        let s = Settings::from_ini_text(
+            "[WorldClocks]\nParis=Romance Standard Time\nAn Extremely Long City Name=UTC\n",
+        );
+        assert_eq!(s.world_clocks.len(), 2);
+        assert_eq!(s.world_clocks[0], ("Paris".to_string(), "Romance Standard Time".to_string()));
+        // 16-char cap
+        assert_eq!(s.world_clocks[1].0, "An Extremely Lon");
+        assert_eq!(s.world_clocks[1].1, "UTC");
+    }
+
+    #[test]
+    fn worldclocks_round_trip() {
+        let mut s = Settings::default();
+        s.world_clocks = vec![
+            ("Reykjavik".to_string(), "Greenwich Standard Time".to_string()),
+            ("Kolkata".to_string(), "India Standard Time".to_string()),
+        ];
+        assert_eq!(Settings::from_ini_text(&s.to_ini_text()).world_clocks, s.world_clocks);
+    }
+
+    #[test]
+    fn screen_mode_resolves_with_clock_default() {
+        let mut s = Settings::default();
+        assert_eq!(s.screen_mode("MISSING"), Mode::Clock);
+        s.screens.insert("D1".into(), ScreenSettings { orientation: Orientation::Auto, mode: Mode::World });
+        assert_eq!(s.screen_mode("D1"), Mode::World);
     }
 }
