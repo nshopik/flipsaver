@@ -1,6 +1,6 @@
 //! /c mode: minimal settings dialog from an in-code DLGTEMPLATE.
 
-use crate::settings::{self, Orientation, Settings};
+use crate::settings::{self, Mode, Orientation, ScreenSettings, Settings};
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::*;
@@ -102,9 +102,9 @@ impl DlgBuilder {
 fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
     let row_h: i16 = 14;
     let rows = monitors.len();
-    let item_count = (10 + rows * 4) as u16;
+    let item_count = (10 + rows * 5) as u16;
     let cy = 108 + rows as i16 * row_h;
-    let mut b = DlgBuilder::new("FlipSaver Settings", 260, cy, item_count);
+    let mut b = DlgBuilder::new("FlipSaver Settings", 300, cy, item_count);
     b.item_atom(0, 7, 9, 45, 8, 0, 0x0082, "Time format:"); // STATIC
     b.item_atom(
         BS_AUTORADIOBUTTON as u32 | WS_TABSTOP.0 | WS_GROUP.0,
@@ -123,9 +123,9 @@ fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
         7, 66, 120, 10, IDC_FLIP as u16, 0x0080, "Flip animation",
     );
 
-    // One row per monitor: label + Auto/Horizontal/Vertical radios. Each
-    // row's first radio carries WS_GROUP so the rows are independent radio
-    // groups; the OK button's WS_GROUP closes the last row.
+    // One row per monitor: label + Auto/Horizontal/Vertical/World radios.
+    // Each row's first radio carries WS_GROUP so the rows are independent
+    // radio groups; the OK button's WS_GROUP closes the last row.
     for (row, (rect, _device)) in monitors.iter().enumerate() {
         let y = 80 + row as i16 * row_h;
         let base = 200 + row as u16 * 4;
@@ -135,18 +135,19 @@ fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
         b.item_atom(0, 7, y + 1, 100, 8, 0, 0x0082, &label);
         b.item_atom(
             BS_AUTORADIOBUTTON as u32 | WS_TABSTOP.0 | WS_GROUP.0,
-            110, y, 38, 10, base, 0x0080, "Auto",
+            110, y, 34, 10, base, 0x0080, "Auto",
         );
-        b.item_atom(BS_AUTORADIOBUTTON as u32, 150, y, 52, 10, base + 1, 0x0080, "Horizontal");
-        b.item_atom(BS_AUTORADIOBUTTON as u32, 205, y, 45, 10, base + 2, 0x0080, "Vertical");
+        b.item_atom(BS_AUTORADIOBUTTON as u32, 146, y, 50, 10, base + 1, 0x0080, "Horizontal");
+        b.item_atom(BS_AUTORADIOBUTTON as u32, 198, y, 42, 10, base + 2, 0x0080, "Vertical");
+        b.item_atom(BS_AUTORADIOBUTTON as u32, 242, y, 42, 10, base + 3, 0x0080, "World");
     }
 
     let by = 87 + rows as i16 * row_h;
     b.item_atom(
         BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0 | WS_GROUP.0,
-        63, by, 50, 14, IDOK.0 as u16, 0x0080, "OK",
+        97, by, 50, 14, IDOK.0 as u16, 0x0080, "OK",
     );
-    b.item_atom(BS_PUSHBUTTON as u32 | WS_TABSTOP.0, 118, by, 50, 14, IDCANCEL.0 as u16, 0x0080, "Cancel");
+    b.item_atom(BS_PUSHBUTTON as u32 | WS_TABSTOP.0, 153, by, 50, 14, IDCANCEL.0 as u16, 0x0080, "Cancel");
     b.words
 }
 
@@ -171,13 +172,17 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             );
             for (row, (_rect, device)) in monitors.iter().enumerate() {
                 let base = 200 + row as i32 * 4;
-                let orient = settings.screens.get(device).copied().unwrap_or(Orientation::Auto);
-                let checked = base + match orient {
-                    Orientation::Auto => 0,
-                    Orientation::Horizontal => 1,
-                    Orientation::Vertical => 2,
-                };
-                let _ = CheckRadioButton(hwnd, base, base + 2, checked);
+                let sc = settings.screens.get(device).copied().unwrap_or_default();
+                let checked = base
+                    + match sc.mode {
+                        Mode::World => 3,
+                        Mode::Clock => match sc.orientation {
+                            Orientation::Auto => 0,
+                            Orientation::Horizontal => 1,
+                            Orientation::Vertical => 2,
+                        },
+                    };
+                let _ = CheckRadioButton(hwnd, base, base + 3, checked);
             }
             1
         }
@@ -192,14 +197,22 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 // map are left as-is and preserved on save.
                 for (row, (_rect, device)) in ctx.1.iter().enumerate() {
                     let base = 200 + row as i32 * 4;
-                    let orient = if IsDlgButtonChecked(hwnd, base + 1) == 1 {
-                        Orientation::Horizontal
-                    } else if IsDlgButtonChecked(hwnd, base + 2) == 1 {
-                        Orientation::Vertical
+                    // Keep the stored orientation while World is active, so
+                    // switching back to a clock restores the last choice.
+                    let prev = ctx.0.screens.get(device).copied().unwrap_or_default();
+                    let sc = if IsDlgButtonChecked(hwnd, base + 3) == 1 {
+                        ScreenSettings { orientation: prev.orientation, mode: Mode::World }
                     } else {
-                        Orientation::Auto
+                        let orientation = if IsDlgButtonChecked(hwnd, base + 1) == 1 {
+                            Orientation::Horizontal
+                        } else if IsDlgButtonChecked(hwnd, base + 2) == 1 {
+                            Orientation::Vertical
+                        } else {
+                            Orientation::Auto
+                        };
+                        ScreenSettings { orientation, mode: Mode::Clock }
                     };
-                    ctx.0.screens.insert(device.clone(), orient);
+                    ctx.0.screens.insert(device.clone(), sc);
                 }
                 let _ = settings::save(&settings::default_path(), &ctx.0);
                 let _ = EndDialog(hwnd, 1);
