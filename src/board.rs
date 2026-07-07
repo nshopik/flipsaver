@@ -142,7 +142,9 @@ pub fn format_row(label: &str, time: Option<TimeParts>, is_24h: bool) -> Vec<cha
 }
 
 /// Cell size = min of the horizontal fit (widest possible row) and the
-/// vertical fit (all rows + margin), times the global scale multiplier.
+/// vertical fit (all rows + margin), scaled through the clock's border
+/// curve so slider 0 keeps the board at 40% of the fit (matching the
+/// clock's floor) rather than shrinking linearly to nothing.
 /// Content block is centered on the screen.
 pub fn compute_grid(width: i32, height: i32, scale_percent: i32, city_count: usize, is_24h: bool) -> Grid {
     let cols = row_width(is_24h) as i32;
@@ -150,7 +152,8 @@ pub fn compute_grid(width: i32, height: i32, scale_percent: i32, city_count: usi
     let by_w = width / cols;
     let by_h = height / (rows + MARGIN_ROWS);
     let base = by_w.min(by_h).max(1);
-    let cell = (base * scale_percent / 100).max(1);
+    let frac = 100 - 2 * crate::clock::border_percent(scale_percent);
+    let cell = (base * frac / 100).max(1);
     let grid_w = cols * cell;
     let grid_h = rows * cell;
     Grid {
@@ -435,15 +438,26 @@ mod tests {
         assert_eq!(g.cols, 28);
         assert_eq!(g.rows, 6);
         // by_w = 1920/28 = 68; by_h = 1080/8 = 135; min = 68.
-        assert_eq!(g.cell, 68);
-        assert_eq!(g.origin_x, (1920 - 28 * 68) / 2);
-        assert_eq!(g.origin_y, (1080 - 6 * 68) / 2);
+        // scale 100 -> border 5% per side -> 90% of the full fit.
+        assert_eq!(g.cell, 68 * 90 / 100);
+        assert_eq!(g.origin_x, (1920 - 28 * g.cell) / 2);
+        assert_eq!(g.origin_y, (1080 - 6 * g.cell) / 2);
     }
 
     #[test]
     fn grid_scale_shrinks_cell() {
         let full = compute_grid(1920, 1080, 100, 6, true).cell;
         let half = compute_grid(1920, 1080, 50, 6, true).cell;
-        assert_eq!(half, full * 50 / 100);
+        assert!(half < full);
+        assert!(half > full / 2, "scale curve must not be linear-to-zero");
+    }
+
+    #[test]
+    fn grid_scale_zero_keeps_clock_floor() {
+        // Slider 0 must match the clock's floor: border 30% per side,
+        // i.e. cells sized to 40% of the full fit — not 1px.
+        let base = 1920 / 28; // horizontal fit wins at 1080p
+        let g = compute_grid(1920, 1080, 0, 6, true);
+        assert_eq!(g.cell, base * 40 / 100);
     }
 }
