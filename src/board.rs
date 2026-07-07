@@ -142,9 +142,9 @@ pub fn format_row(label: &str, time: Option<TimeParts>, is_24h: bool) -> Vec<cha
 }
 
 /// Cell size = min of the horizontal fit (widest possible row) and the
-/// vertical fit (all rows + margin), scaled through the clock's border
-/// curve so slider 0 keeps the board at 40% of the fit (matching the
-/// clock's floor) rather than shrinking linearly to nothing.
+/// vertical fit (all rows + margin), scaled linearly from a 40% floor
+/// at slider 0 (matching the clock's minimum) to the full fit at 100 —
+/// unlike the clock, max zoom reaches the screen edges.
 /// Content block is centered on the screen.
 pub fn compute_grid(width: i32, height: i32, scale_percent: i32, city_count: usize, is_24h: bool) -> Grid {
     let cols = row_width(is_24h) as i32;
@@ -152,7 +152,7 @@ pub fn compute_grid(width: i32, height: i32, scale_percent: i32, city_count: usi
     let by_w = width / cols;
     let by_h = height / (rows + MARGIN_ROWS);
     let base = by_w.min(by_h).max(1);
-    let frac = 100 - 2 * crate::clock::border_percent(scale_percent);
+    let frac = 40 + scale_percent.clamp(0, 100) * 60 / 100;
     let cell = (base * frac / 100).max(1);
     let grid_w = cols * cell;
     let grid_h = rows * cell;
@@ -438,8 +438,8 @@ mod tests {
         assert_eq!(g.cols, 28);
         assert_eq!(g.rows, 6);
         // by_w = 1920/28 = 68; by_h = 1080/8 = 135; min = 68.
-        // scale 100 -> border 5% per side -> 90% of the full fit.
-        assert_eq!(g.cell, 68 * 90 / 100);
+        // scale 100 -> full fit, edge to edge.
+        assert_eq!(g.cell, 68);
         assert_eq!(g.origin_x, (1920 - 28 * g.cell) / 2);
         assert_eq!(g.origin_y, (1080 - 6 * g.cell) / 2);
     }
