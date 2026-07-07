@@ -200,6 +200,92 @@ pub mod draw {
         }
     }
 
+    /// panel+content clipped to `clip` under identity (no fold). The
+    /// `draw_content` closure paints under the caller's clip.
+    pub(crate) unsafe fn fold_clipped(
+        rt: &ID2D1HwndRenderTarget,
+        clip: D2D_RECT_F,
+        draw_content: &dyn Fn() -> Result<()>,
+    ) -> Result<()> {
+        rt.SetTransform(&Matrix3x2::identity());
+        rt.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
+        let r = draw_content();
+        rt.PopAxisAlignedClip();
+        r
+    }
+
+    /// One folding leaf: content clipped to `clip`, squashed to `leaf_scale`
+    /// about `hinge`, then a shade overlay (`shade` filled over
+    /// `shade_rect`). D2D quirk (do NOT reorder): PushAxisAlignedClip bakes
+    /// its rect using the transform active at push time, so push under
+    /// identity (screen coords) THEN set the fold transform.
+    pub(crate) unsafe fn fold_leaf(
+        rt: &ID2D1HwndRenderTarget,
+        clip: D2D_RECT_F,
+        hinge: f32,
+        leaf_scale: f32,
+        shade: &ID2D1SolidColorBrush,
+        shade_rect: &D2D1_ROUNDED_RECT,
+        shade_alpha: f32,
+        draw_content: &dyn Fn() -> Result<()>,
+    ) -> Result<()> {
+        rt.SetTransform(&Matrix3x2::identity());
+        rt.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
+        rt.SetTransform(&Matrix3x2::scale_around(
+            1.0,
+            leaf_scale,
+            windows_numerics::Vector2 { X: 0.0, Y: hinge },
+        ));
+        draw_content()?;
+        shade.SetOpacity(shade_alpha);
+        rt.FillRoundedRectangle(shade_rect, shade);
+        rt.SetTransform(&Matrix3x2::identity());
+        rt.PopAxisAlignedClip();
+        Ok(())
+    }
+
+    /// Full fold frame for one rect: static halves behind + the moving leaf,
+    /// then the split line on top at the hinge. `draw_old` / `draw_new`
+    /// paint the respective faces; `shade_rect` is the rect used for the
+    /// leaf's shade overlay (the whole cell).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) unsafe fn fold_frame(
+        rt: &ID2D1HwndRenderTarget,
+        rect: D2D_RECT_F,
+        hinge: f32,
+        f: FlipFrame,
+        shade: &ID2D1SolidColorBrush,
+        shade_rect: &D2D1_ROUNDED_RECT,
+        black: &ID2D1SolidColorBrush,
+        split_stroke: f32,
+        draw_old: &dyn Fn() -> Result<()>,
+        draw_new: &dyn Fn() -> Result<()>,
+    ) -> Result<()> {
+        let top = D2D_RECT_F { left: rect.left, top: rect.top, right: rect.right, bottom: hinge };
+        let bottom = D2D_RECT_F { left: rect.left, top: hinge, right: rect.right, bottom: rect.bottom };
+        match f.phase {
+            Phase::UpperFold => {
+                fold_clipped(rt, top, draw_new)?;
+                fold_clipped(rt, bottom, draw_old)?;
+                fold_leaf(rt, top, hinge, f.leaf_scale, shade, shade_rect, f.shade_alpha, draw_old)?;
+            }
+            Phase::LowerFall => {
+                fold_clipped(rt, top, draw_new)?;
+                fold_clipped(rt, bottom, draw_old)?;
+                fold_leaf(rt, bottom, hinge, f.leaf_scale, shade, shade_rect, f.shade_alpha, draw_new)?;
+            }
+        }
+        rt.SetTransform(&Matrix3x2::identity());
+        rt.DrawLine(
+            windows_numerics::Vector2 { X: rect.left, Y: hinge },
+            windows_numerics::Vector2 { X: rect.right, Y: hinge },
+            black,
+            split_stroke,
+            None,
+        );
+        Ok(())
+    }
+
     pub struct FaceCache {
         pub layout: Layout,
         pub is_24h: bool,
@@ -375,108 +461,6 @@ pub mod draw {
             Ok(())
         }
 
-        /// panel+digit clipped to `clip` under identity (no fold).
-        unsafe fn draw_clipped(
-            &self,
-            rt: &ID2D1HwndRenderTarget,
-            bl: &BoxLayout,
-            clip: D2D_RECT_F,
-            text: &str,
-            marker: Option<Marker>,
-        ) -> Result<()> {
-            rt.SetTransform(&Matrix3x2::identity());
-            rt.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
-            self.draw_panel_digit(rt, bl, text, marker)?;
-            rt.PopAxisAlignedClip();
-            Ok(())
-        }
-
-        /// One folding leaf: panel+digit clipped to `clip`, squashed to
-        /// `leaf_scale` about the hinge, then a shade overlay.
-        ///
-        /// D2D quirk (do NOT reorder): PushAxisAlignedClip bakes its rect into
-        /// device space using the transform active *at push time*; a later
-        /// SetTransform does not re-warp an already-pushed clip. So push the
-        /// clip under identity (screen coords), THEN set the fold transform.
-        /// The pivot sits on the hinge (a fixed point of the scale), and the
-        /// squashed content is always a subset of the un-scaled half-rect, so
-        /// this order clips correctly in both phases.
-        unsafe fn draw_leaf(
-            &self,
-            rt: &ID2D1HwndRenderTarget,
-            bl: &BoxLayout,
-            clip: D2D_RECT_F,
-            hinge: f32,
-            leaf_scale: f32,
-            text: &str,
-            marker: Option<Marker>,
-            shade_alpha: f32,
-        ) -> Result<()> {
-            rt.SetTransform(&Matrix3x2::identity());
-            rt.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
-            // scale(1, s) about (x, hinge): windows-numerics uses D2D's
-            // row-vector convention, so the hinge line stays static as s
-            // varies (a reversed multiply would smear instead of squash -
-            // the manual-matrix hinge check catches that).
-            rt.SetTransform(&Matrix3x2::scale_around(
-                1.0,
-                leaf_scale,
-                windows_numerics::Vector2 { X: 0.0, Y: hinge },
-            ));
-            self.draw_panel_digit(rt, bl, text, marker)?;
-            self.shade.SetOpacity(shade_alpha);
-            let rounded = D2D1_ROUNDED_RECT {
-                rect: rectf(bl.rect),
-                radiusX: self.layout.corner_radius as f32,
-                radiusY: self.layout.corner_radius as f32,
-            };
-            rt.FillRoundedRectangle(&rounded, &self.shade);
-            rt.SetTransform(&Matrix3x2::identity());
-            rt.PopAxisAlignedClip();
-            Ok(())
-        }
-
-        /// Full fold frame for one box: static backgrounds + the moving leaf,
-        /// then the split line on top at the hinge.
-        unsafe fn draw_fold(
-            &self,
-            rt: &ID2D1HwndRenderTarget,
-            bl: &BoxLayout,
-            f: FlipFrame,
-            old_text: &str,
-            old_marker: Option<Marker>,
-            new_text: &str,
-            new_marker: Option<Marker>,
-        ) -> Result<()> {
-            let r = rectf(bl.rect);
-            let hinge = bl.split_y as f32;
-            let top = D2D_RECT_F { left: r.left, top: r.top, right: r.right, bottom: hinge };
-            let bottom = D2D_RECT_F { left: r.left, top: hinge, right: r.right, bottom: r.bottom };
-            match f.phase {
-                Phase::UpperFold => {
-                    // reveal new top behind; old bottom static; old leaf folds down
-                    self.draw_clipped(rt, bl, top, new_text, new_marker)?;
-                    self.draw_clipped(rt, bl, bottom, old_text, old_marker)?;
-                    self.draw_leaf(rt, bl, top, hinge, f.leaf_scale, old_text, old_marker, f.shade_alpha)?;
-                }
-                Phase::LowerFall => {
-                    // new top static; old bottom behind; new leaf falls open
-                    self.draw_clipped(rt, bl, top, new_text, new_marker)?;
-                    self.draw_clipped(rt, bl, bottom, old_text, old_marker)?;
-                    self.draw_leaf(rt, bl, bottom, hinge, f.leaf_scale, new_text, new_marker, f.shade_alpha)?;
-                }
-            }
-            rt.SetTransform(&Matrix3x2::identity());
-            rt.DrawLine(
-                windows_numerics::Vector2 { X: r.left, Y: hinge },
-                windows_numerics::Vector2 { X: r.right, Y: hinge },
-                &self.black,
-                self.layout.split_stroke,
-                None,
-            );
-            Ok(())
-        }
-
         /// (digit string, marker) for a box given its value. Markers ride the
         /// hours box only; format_time derives them from the hour.
         fn box_text(&self, is_hours: bool, value: u32) -> (String, Option<Marker>) {
@@ -510,7 +494,25 @@ pub mod draw {
                         self.draw_box(rt, bl, &new_t, new_m)
                     } else {
                         let (old_t, old_m) = self.box_text(is_hours, a.from);
-                        self.draw_fold(rt, bl, flip_frame(progress), &old_t, old_m, &new_t, new_m)
+                        let rect = rectf(bl.rect);
+                        let hinge = bl.split_y as f32;
+                        let shade_rect = D2D1_ROUNDED_RECT {
+                            rect,
+                            radiusX: self.layout.corner_radius as f32,
+                            radiusY: self.layout.corner_radius as f32,
+                        };
+                        fold_frame(
+                            rt,
+                            rect,
+                            hinge,
+                            flip_frame(progress),
+                            &self.shade,
+                            &shade_rect,
+                            &self.black,
+                            self.layout.split_stroke,
+                            &|| self.draw_panel_digit(rt, bl, &old_t, old_m),
+                            &|| self.draw_panel_digit(rt, bl, &new_t, new_m),
+                        )
                     }
                 }
             }
