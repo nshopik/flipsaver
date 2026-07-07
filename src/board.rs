@@ -164,7 +164,142 @@ pub fn compute_grid(width: i32, height: i32, scale_percent: i32, city_count: usi
 
 #[cfg(windows)]
 pub mod draw {
-    // Filled in Task 5 (BoardCache + static render).
+    use super::Grid;
+    use crate::screensaver::Gfx;
+    use windows::core::*;
+    use windows::Win32::Graphics::Direct2D::Common::*;
+    use windows::Win32::Graphics::Direct2D::*;
+    use windows::Win32::Graphics::DirectWrite::*;
+
+    fn color(rgb: u32) -> D2D1_COLOR_F {
+        D2D1_COLOR_F {
+            r: ((rgb >> 16) & 0xFF) as f32 / 255.0,
+            g: ((rgb >> 8) & 0xFF) as f32 / 255.0,
+            b: (rgb & 0xFF) as f32 / 255.0,
+            a: 1.0,
+        }
+    }
+
+    /// Cached device-dependent board resources. Brushes and the cell text
+    /// format survive across frames; only the glyph text layouts are built
+    /// per drawn cell (a handful change per minute).
+    pub struct BoardCache {
+        pub grid: Grid,
+        cell_bg: ID2D1SolidColorBrush,
+        outline: ID2D1SolidColorBrush,
+        glyph: ID2D1SolidColorBrush,
+        pub black: ID2D1SolidColorBrush,
+        pub shade: ID2D1SolidColorBrush,
+        cell_format: IDWriteTextFormat,
+        corner_radius: f32,
+        dwrite: IDWriteFactory5,
+    }
+
+    impl BoardCache {
+        pub fn new(
+            rt: &ID2D1HwndRenderTarget,
+            gfx: &Gfx,
+            grid: Grid,
+        ) -> Result<BoardCache> {
+            unsafe {
+                let cell_bg = rt.CreateSolidColorBrush(&color(0x121212), None)?;
+                let outline = rt.CreateSolidColorBrush(&color(0x2A2A2A), None)?;
+                let glyph = rt.CreateSolidColorBrush(&color(0xB7B7B7), None)?;
+                let black = rt.CreateSolidColorBrush(&color(0x000000), None)?;
+                let shade = rt.CreateSolidColorBrush(&color(0x000000), None)?;
+                let px = (grid.cell as f32 * 0.82).max(1.0);
+                let cell_format = gfx.dwrite.CreateTextFormat(
+                    &HSTRING::from(gfx.font.family),
+                    gfx.font
+                        .collection
+                        .as_ref()
+                        .map(|c| c.cast::<IDWriteFontCollection>())
+                        .transpose()?
+                        .as_ref(),
+                    DWRITE_FONT_WEIGHT_BOLD,
+                    DWRITE_FONT_STYLE_NORMAL,
+                    gfx.font.stretch,
+                    px,
+                    w!("en-us"),
+                )?;
+                cell_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+                cell_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+                Ok(BoardCache {
+                    corner_radius: grid.cell as f32 / 12.0,
+                    grid,
+                    cell_bg,
+                    outline,
+                    glyph,
+                    black,
+                    shade,
+                    cell_format,
+                    dwrite: gfx.dwrite.clone(),
+                })
+            }
+        }
+
+        fn cell_rect(&self, col: usize, row: usize) -> D2D_RECT_F {
+            let g = &self.grid;
+            let x = (g.origin_x + col as i32 * g.cell) as f32;
+            let y = (g.origin_y + row as i32 * g.cell) as f32;
+            D2D_RECT_F { left: x, top: y, right: x + g.cell as f32, bottom: y + g.cell as f32 }
+        }
+
+        fn rounded(&self, r: D2D_RECT_F) -> D2D1_ROUNDED_RECT {
+            D2D1_ROUNDED_RECT { rect: r, radiusX: self.corner_radius, radiusY: self.corner_radius }
+        }
+
+        /// One cell: dark rounded background, faint outline, centered glyph.
+        /// A space glyph draws the empty cell (background only).
+        pub(crate) unsafe fn draw_cell(
+            &self,
+            rt: &ID2D1HwndRenderTarget,
+            col: usize,
+            row: usize,
+            glyph: char,
+        ) -> Result<()> {
+            let r = self.cell_rect(col, row);
+            let rounded = self.rounded(r);
+            rt.FillRoundedRectangle(&rounded, &self.cell_bg);
+            rt.DrawRoundedRectangle(&rounded, &self.outline, 1.0, None);
+            if glyph != ' ' {
+                let wide: Vec<u16> = [glyph].iter().map(|c| *c as u16).collect();
+                let tl = self.dwrite.CreateTextLayout(
+                    &wide,
+                    &self.cell_format,
+                    self.grid.cell as f32,
+                    self.grid.cell as f32,
+                )?;
+                rt.DrawTextLayout(
+                    windows_numerics::Vector2 { X: r.left, Y: r.top },
+                    &tl,
+                    &self.glyph,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                );
+            }
+            Ok(())
+        }
+    }
+
+    /// Paint the whole board: black clear + every cell. `cells` is row-major,
+    /// `grid.rows * grid.cols` glyphs.
+    pub fn draw_board(
+        rt: &ID2D1HwndRenderTarget,
+        cache: &BoardCache,
+        cells: &[char],
+    ) -> Result<()> {
+        unsafe {
+            rt.Clear(Some(&color(0x000000)));
+            let cols = cache.grid.cols;
+            for row in 0..cache.grid.rows {
+                for col in 0..cols {
+                    let g = cells.get(row * cols + col).copied().unwrap_or(' ');
+                    cache.draw_cell(rt, col, row, g)?;
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
