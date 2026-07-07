@@ -13,6 +13,8 @@ minimal settings dialog (12/24 h, size).
 
 ## World clocks
 
+![flipsaver world-clock board](wordclock.png)
+
 Any monitor can show a split-flap departure board of world times
 instead of the clock: pick **World** for that screen in the settings
 dialog. Each row is a city and its local time, with AM/PM (12 h mode)
