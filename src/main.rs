@@ -12,6 +12,9 @@ mod screensaver;
 mod config;
 
 #[cfg(windows)]
+mod tz;
+
+#[cfg(windows)]
 pub mod perf {
     use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
     use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};

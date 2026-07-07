@@ -119,7 +119,7 @@ pub fn font_display_name() -> &'static str {
     }
 }
 
-fn debug_log(line: &str) {
+pub fn debug_log(line: &str) {
     let wide: Vec<u16> = line.encode_utf16().chain([0]).collect();
     unsafe {
         windows::Win32::System::Diagnostics::Debug::OutputDebugStringW(PCWSTR(wide.as_ptr()));
