@@ -1,6 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod clock;
+mod board;
 mod fontsel;
 mod settings;
 

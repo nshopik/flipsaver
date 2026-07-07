@@ -1,0 +1,270 @@
+//! World-clock board: pure layout and formatting. No Win32 types, so it
+//! unit-tests on the host. The Direct2D render lives in the `draw`
+//! submodule (Win32-only).
+
+/// Cells reserved for the city label (left-aligned, uppercase).
+pub const LABEL_CELLS: usize = 16;
+
+/// Precomputed, Win32-free inputs for one row. `weekday` is 0=Sun..6=Sat
+/// (Win32 SYSTEMTIME.wDayOfWeek convention).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeParts {
+    pub hour: u32,
+    pub minute: u32,
+    pub is_dst: bool,
+    pub date_differs: bool,
+    pub weekday: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Grid {
+    pub cols: usize,
+    pub rows: usize,
+    pub cell: i32,
+    pub origin_x: i32,
+    pub origin_y: i32,
+}
+
+/// One breathing row top and bottom so the block never touches the edges.
+const MARGIN_ROWS: i32 = 2;
+
+/// Right-hand block width: time(5) + gap + [AM/PM(2) + gap] + day(3) + gap
+/// + dst(1). All fields reserved unconditionally so the grid never reflows
+/// at midnight or a DST transition.
+fn right_block_width(is_24h: bool) -> usize {
+    if is_24h {
+        5 + 1 + 3 + 1 + 1
+    } else {
+        5 + 1 + 2 + 1 + 3 + 1 + 1
+    }
+}
+
+/// Total columns in one row: label + gap + right block.
+pub fn row_width(is_24h: bool) -> usize {
+    LABEL_CELLS + 1 + right_block_width(is_24h)
+}
+
+pub fn weekday_abbr(dow: u8) -> &'static str {
+    match dow {
+        0 => "SUN",
+        1 => "MON",
+        2 => "TUE",
+        3 => "WED",
+        4 => "THU",
+        5 => "FRI",
+        6 => "SAT",
+        _ => "???",
+    }
+}
+
+/// A zone is in DST when the actually-applied bias differs from its
+/// standard-season bias (both UTC-minus-local minutes, Win32 sign). Kept
+/// pure so it tests without Win32; the biases are derived in `tz.rs`.
+pub fn dst_active(actual_bias: i32, standard_bias: i32) -> bool {
+    actual_bias != standard_bias
+}
+
+/// The changed cell indices between two equal-length rows. City-name cells
+/// never change after startup, so steady state is a handful of indices.
+pub fn diff_cells(old: &[char], new: &[char]) -> Vec<usize> {
+    old.iter()
+        .zip(new.iter())
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+fn push_str_field(row: &mut Vec<char>, s: &str, width: usize, right: bool) {
+    let chars: Vec<char> = s.chars().take(width).collect();
+    let pad = width - chars.len();
+    if right {
+        for _ in 0..pad {
+            row.push(' ');
+        }
+    }
+    row.extend(chars);
+    if !right {
+        for _ in 0..pad {
+            row.push(' ');
+        }
+    }
+}
+
+/// 12h: `H:MM` (hour 1..12, no leading zero); 24h: `HH:MM`. Right-justified
+/// in 5 cells either way. `None` renders the unresolved-zone placeholder.
+fn time_field(t: Option<TimeParts>, is_24h: bool) -> String {
+    match t {
+        None => "--:--".to_string(),
+        Some(t) if is_24h => format!("{:02}:{:02}", t.hour, t.minute),
+        Some(t) => {
+            let h12 = match t.hour % 12 {
+                0 => 12,
+                h => h,
+            };
+            format!("{}:{:02}", h12, t.minute)
+        }
+    }
+}
+
+/// One full row as a fixed-width `Vec<char>` (length == `row_width`). Label
+/// left, everything else in the right block; blank fields are spaces so the
+/// grid geometry is stable. `time == None` is an unresolved timezone:
+/// label + `--:--`, all other fields blank.
+pub fn format_row(label: &str, time: Option<TimeParts>, is_24h: bool) -> Vec<char> {
+    let mut row: Vec<char> = Vec::with_capacity(row_width(is_24h));
+    push_str_field(&mut row, &label.to_uppercase(), LABEL_CELLS, false);
+    row.push(' ');
+    push_str_field(&mut row, &time_field(time, is_24h), 5, true);
+    if !is_24h {
+        row.push(' ');
+        let ampm = match time {
+            Some(t) if t.hour >= 12 => "PM",
+            Some(_) => "AM",
+            None => "",
+        };
+        push_str_field(&mut row, ampm, 2, false);
+    }
+    row.push(' ');
+    let day = match time {
+        Some(t) if t.date_differs => weekday_abbr(t.weekday),
+        _ => "",
+    };
+    push_str_field(&mut row, day, 3, false);
+    row.push(' ');
+    let dst = match time {
+        Some(t) if t.is_dst => "*",
+        _ => "",
+    };
+    push_str_field(&mut row, dst, 1, false);
+    debug_assert_eq!(row.len(), row_width(is_24h));
+    row
+}
+
+/// Cell size = min of the horizontal fit (widest possible row) and the
+/// vertical fit (all rows + margin), times the global scale multiplier.
+/// Content block is centered on the screen.
+pub fn compute_grid(width: i32, height: i32, scale_percent: i32, city_count: usize, is_24h: bool) -> Grid {
+    let cols = row_width(is_24h) as i32;
+    let rows = city_count.max(1) as i32;
+    let by_w = width / cols;
+    let by_h = height / (rows + MARGIN_ROWS);
+    let base = by_w.min(by_h).max(1);
+    let cell = (base * scale_percent / 100).max(1);
+    let grid_w = cols * cell;
+    let grid_h = rows * cell;
+    Grid {
+        cols: cols as usize,
+        rows: city_count,
+        cell,
+        origin_x: (width - grid_w) / 2,
+        origin_y: (height - grid_h) / 2,
+    }
+}
+
+#[cfg(windows)]
+pub mod draw {
+    // Filled in Task 5 (BoardCache + static render).
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(row: &[char]) -> String {
+        row.iter().collect()
+    }
+
+    #[test]
+    fn row_width_reserves_all_fields() {
+        assert_eq!(row_width(false), 16 + 1 + (5 + 1 + 2 + 1 + 3 + 1 + 1)); // 31
+        assert_eq!(row_width(true), 16 + 1 + (5 + 1 + 3 + 1 + 1)); // 28
+    }
+
+    #[test]
+    fn format_12h_pm_no_dst_same_date() {
+        let t = TimeParts { hour: 15, minute: 7, is_dst: false, date_differs: false, weekday: 3 };
+        let row = format_row("Los Angeles", Some(t), false);
+        assert_eq!(row.len(), row_width(false));
+        // "LOS ANGELES" (11) padded to 16, gap, " 3:07" right-just in 5,
+        // gap, "PM", gap, blank day (3), gap, blank dst (1).
+        assert_eq!(s(&row), "LOS ANGELES       3:07 PM      ");
+    }
+
+    #[test]
+    fn format_12h_am_dst_and_day_shown() {
+        let t = TimeParts { hour: 0, minute: 5, is_dst: true, date_differs: true, weekday: 3 };
+        let row = format_row("Tokyo", Some(t), false);
+        assert_eq!(s(&row), "TOKYO            12:05 AM WED *");
+    }
+
+    #[test]
+    fn format_24h_has_no_ampm_column() {
+        let t = TimeParts { hour: 9, minute: 4, is_dst: false, date_differs: false, weekday: 1 };
+        let row = format_row("London", Some(t), true);
+        assert_eq!(row.len(), row_width(true));
+        assert_eq!(s(&row), "LONDON           09:04      ");
+    }
+
+    #[test]
+    fn day_only_shown_when_date_differs() {
+        let same = TimeParts { hour: 9, minute: 0, is_dst: false, date_differs: false, weekday: 2 };
+        let diff = TimeParts { hour: 9, minute: 0, is_dst: false, date_differs: true, weekday: 2 };
+        assert!(!s(&format_row("X", Some(same), true)).contains("TUE"));
+        assert!(s(&format_row("X", Some(diff), true)).contains("TUE"));
+    }
+
+    #[test]
+    fn unresolved_zone_renders_dashes() {
+        let row = format_row("Nowhere", None, false);
+        assert_eq!(row.len(), row_width(false));
+        assert_eq!(s(&row), "NOWHERE          --:--         ");
+    }
+
+    #[test]
+    fn label_truncates_and_uppercases() {
+        let t = TimeParts { hour: 1, minute: 0, is_dst: false, date_differs: false, weekday: 0 };
+        let row = format_row("an extremely long name", Some(t), true);
+        let label: String = row[..LABEL_CELLS].iter().collect();
+        assert_eq!(label, "AN EXTREMELY LON");
+    }
+
+    #[test]
+    fn dst_active_compares_bias() {
+        assert!(dst_active(-420, -480)); // PDT vs PST
+        assert!(!dst_active(-480, -480));
+    }
+
+    #[test]
+    fn diff_cells_reports_changed_indices() {
+        let a: Vec<char> = "12:00".chars().collect();
+        let b: Vec<char> = "13:01".chars().collect();
+        assert_eq!(diff_cells(&a, &b), vec![1, 4]);
+        assert!(diff_cells(&a, &a).is_empty());
+    }
+
+    #[test]
+    fn weekday_abbr_maps_win32_dow() {
+        assert_eq!(weekday_abbr(0), "SUN");
+        assert_eq!(weekday_abbr(6), "SAT");
+    }
+
+    #[test]
+    fn grid_fits_and_centers() {
+        // 6 cities, 24h (28 cols). scale 100 for an exact check.
+        let g = compute_grid(1920, 1080, 100, 6, true);
+        assert_eq!(g.cols, 28);
+        assert_eq!(g.rows, 6);
+        // by_w = 1920/28 = 68; by_h = 1080/8 = 135; min = 68.
+        assert_eq!(g.cell, 68);
+        assert_eq!(g.origin_x, (1920 - 28 * 68) / 2);
+        assert_eq!(g.origin_y, (1080 - 6 * 68) / 2);
+    }
+
+    #[test]
+    fn grid_scale_shrinks_cell() {
+        let full = compute_grid(1920, 1080, 100, 6, true).cell;
+        let half = compute_grid(1920, 1080, 50, 6, true).cell;
+        assert_eq!(half, full * 50 / 100);
+    }
+}
