@@ -142,8 +142,8 @@ pub fn format_row(label: &str, time: Option<TimeParts>, is_24h: bool) -> Vec<cha
 }
 
 /// Cell size = min of the horizontal fit (widest possible row) and the
-/// vertical fit (all rows + margin), scaled linearly from a 40% floor
-/// at slider 0 (matching the clock's minimum) to the full fit at 100 —
+/// vertical fit (all rows + margin), scaled linearly from a 50% floor
+/// at slider 0 to the full fit at 100 (each slider notch is +5%) —
 /// unlike the clock, max zoom reaches the screen edges.
 /// Content block is centered on the screen.
 pub fn compute_grid(width: i32, height: i32, scale_percent: i32, city_count: usize, is_24h: bool) -> Grid {
@@ -152,7 +152,7 @@ pub fn compute_grid(width: i32, height: i32, scale_percent: i32, city_count: usi
     let by_w = width / cols;
     let by_h = height / (rows + MARGIN_ROWS);
     let base = by_w.min(by_h).max(1);
-    let frac = 40 + scale_percent.clamp(0, 100) * 60 / 100;
+    let frac = 50 + scale_percent.clamp(0, 100) * 50 / 100;
     let cell = (base * frac / 100).max(1);
     let grid_w = cols * cell;
     let grid_h = rows * cell;
@@ -453,11 +453,10 @@ mod tests {
     }
 
     #[test]
-    fn grid_scale_zero_keeps_clock_floor() {
-        // Slider 0 must match the clock's floor: border 30% per side,
-        // i.e. cells sized to 40% of the full fit — not 1px.
+    fn grid_scale_zero_keeps_half_floor() {
+        // Slider 0 -> 50% of the full fit (each notch +5%) — not 1px.
         let base = 1920 / 28; // horizontal fit wins at 1080p
         let g = compute_grid(1920, 1080, 0, 6, true);
-        assert_eq!(g.cell, base * 40 / 100);
+        assert_eq!(g.cell, base * 50 / 100);
     }
 }
