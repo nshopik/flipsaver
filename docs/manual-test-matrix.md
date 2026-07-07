@@ -43,6 +43,7 @@ same machine.
 | 34 | Board on single monitor, and preview (`/p`) when primary is World | |
 | 35 | No grid reflow at midnight or DST transition (day/`*` columns always reserved) | |
 | 36 | Non-ASCII city label (e.g. `Zürich`) renders; label > 16 chars truncated | |
+| 37 | "World size" slider resizes the board only (clock size unaffected); persists as `BoardScale`; absent key → 100% | |
 
 ## Fidelity (side-by-side vs FlipIt, same machine)
 

@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **World-clock board**: any monitor can show a split-flap board of
   city/time rows instead of the clock (`World` per-monitor option in
   the settings dialog; cities in `[WorldClocks]` in `Settings.ini`, six
-  preloaded).
+  preloaded). Own "World size" slider (`BoardScale`, default 100%),
+  independent of the clock size.
 - **Flip animation**: digit changes fold like a split-flap board (~600ms),
   toggleable in the settings dialog (`FlipAnimation` in `[General]`, on by
   default).

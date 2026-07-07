@@ -418,7 +418,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                     Mode::Board { zones, cache, cells } => {
                         if cache.is_none() {
                             let grid = crate::board::compute_grid(
-                                w, h, state.settings.scale, zones.len(), is_24h,
+                                w, h, state.settings.board_scale, zones.len(), is_24h,
                             );
                             *cache = crate::board::draw::BoardCache::new(&rt, &state.gfx, grid).ok();
                             if let Some(bc) = cache {

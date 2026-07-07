@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_SCALE: i32 = 70;
+const DEFAULT_BOARD_SCALE: i32 = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
@@ -85,6 +86,7 @@ fn default_world_clocks() -> Vec<(String, String)> {
 pub struct Settings {
     pub display_24hr: bool,
     pub scale: i32, // 0..=100, slider value x 10
+    pub board_scale: i32, // world-board size, same encoding as scale
     pub flip_animation: bool,
     pub screens: BTreeMap<String, ScreenSettings>,
     /// City -> Windows timezone key. A Vec (not a map): row order is the
@@ -97,6 +99,7 @@ impl Default for Settings {
         Settings {
             display_24hr: false,
             scale: DEFAULT_SCALE,
+            board_scale: DEFAULT_BOARD_SCALE,
             flip_animation: true,
             screens: BTreeMap::new(),
             world_clocks: default_world_clocks(),
@@ -136,6 +139,9 @@ impl Settings {
                         s.display_24hr = value.trim().parse::<i32>().map(|v| v == 1).unwrap_or(false)
                     }
                     "Scale" => s.scale = value.trim().parse().unwrap_or(DEFAULT_SCALE),
+                    "BoardScale" => {
+                        s.board_scale = value.trim().parse().unwrap_or(DEFAULT_BOARD_SCALE)
+                    }
                     // Default on; only an explicit 0 disables. Unparseable
                     // (and absent) stays on so pre-existing INIs animate.
                     "FlipAnimation" => {
@@ -169,9 +175,10 @@ impl Settings {
 
     pub fn to_ini_text(&self) -> String {
         let mut out = format!(
-            "[General]\r\nDisplay24Hr={}\r\nScale={}\r\nFlipAnimation={}\r\n\r\n",
+            "[General]\r\nDisplay24Hr={}\r\nScale={}\r\nBoardScale={}\r\nFlipAnimation={}\r\n\r\n",
             if self.display_24hr { 1 } else { 0 },
             self.scale,
+            self.board_scale,
             if self.flip_animation { 1 } else { 0 },
         );
         for (name, sc) in &self.screens {
@@ -244,6 +251,23 @@ mod tests {
     }
 
     #[test]
+    fn board_scale_defaults_to_100() {
+        assert_eq!(Settings::default().board_scale, 100);
+        // absent key (pre-existing INIs) -> 100
+        assert_eq!(Settings::from_ini_text("[General]\nScale=70\n").board_scale, 100);
+        // garbage -> 100
+        assert_eq!(Settings::from_ini_text("[General]\nBoardScale=abc\n").board_scale, 100);
+    }
+
+    #[test]
+    fn board_scale_round_trips() {
+        let mut s = Settings::default();
+        s.board_scale = 40;
+        assert_eq!(Settings::from_ini_text(&s.to_ini_text()).board_scale, 40);
+        assert!(s.to_ini_text().contains("BoardScale=40"));
+    }
+
+    #[test]
     fn flip_animation_defaults_on() {
         assert!(Settings::default().flip_animation);
         // absent key -> on
@@ -303,6 +327,7 @@ mod tests {
         let s = Settings {
             display_24hr: true,
             scale: 90,
+            board_scale: 100,
             flip_animation: true,
             screens: std::collections::BTreeMap::new(),
             world_clocks: Vec::new(),
@@ -325,6 +350,7 @@ mod tests {
         let s = Settings {
             display_24hr: true,
             scale: 20,
+            board_scale: 100,
             flip_animation: true,
             screens: std::collections::BTreeMap::new(),
             world_clocks: Vec::new(),
@@ -384,6 +410,7 @@ mod tests {
         let mut s = Settings {
             display_24hr: true,
             scale: 40,
+            board_scale: 100,
             flip_animation: true,
             screens: std::collections::BTreeMap::new(),
             world_clocks: Vec::new(),

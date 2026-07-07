@@ -10,6 +10,7 @@ const IDC_12H: i32 = 101;
 const IDC_24H: i32 = 102;
 const IDC_SCALE: i32 = 103;
 const IDC_FLIP: i32 = 104;
+const IDC_BOARDSCALE: i32 = 105;
 
 // Missing from the windows crate's Controls bindings; TBM_GETPOS = WM_USER.
 const TBM_GETPOS: u32 = 1024;
@@ -102,8 +103,8 @@ impl DlgBuilder {
 fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
     let row_h: i16 = 14;
     let rows = monitors.len();
-    let item_count = (10 + rows * 5) as u16;
-    let cy = 108 + rows as i16 * row_h;
+    let item_count = (12 + rows * 5) as u16;
+    let cy = 125 + rows as i16 * row_h;
     let mut b = DlgBuilder::new("FlipSaver Settings", 300, cy, item_count);
     b.item_atom(0, 7, 9, 45, 8, 0, 0x0082, "Time format:"); // STATIC
     b.item_atom(
@@ -116,18 +117,23 @@ fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
         (TBS_AUTOTICKS | TBS_HORZ) as u32 | WS_TABSTOP.0 | WS_GROUP.0,
         58, 29, 110, 15, IDC_SCALE as u16, "msctls_trackbar32", "",
     );
-    b.item_atom(0, 7, 52, 45, 8, 0, 0x0082, "Font:");
-    b.item_atom(0, 60, 52, 108, 8, 0, 0x0082, font_name);
+    b.item_atom(0, 7, 49, 48, 8, 0, 0x0082, "World size:");
+    b.item_class(
+        (TBS_AUTOTICKS | TBS_HORZ) as u32 | WS_TABSTOP.0 | WS_GROUP.0,
+        58, 46, 110, 15, IDC_BOARDSCALE as u16, "msctls_trackbar32", "",
+    );
+    b.item_atom(0, 7, 69, 45, 8, 0, 0x0082, "Font:");
+    b.item_atom(0, 60, 69, 108, 8, 0, 0x0082, font_name);
     b.item_atom(
         BS_AUTOCHECKBOX as u32 | WS_TABSTOP.0 | WS_GROUP.0,
-        7, 66, 120, 10, IDC_FLIP as u16, 0x0080, "Flip animation",
+        7, 83, 120, 10, IDC_FLIP as u16, 0x0080, "Flip animation",
     );
 
     // One row per monitor: label + Auto/Horizontal/Vertical/World radios.
     // Each row's first radio carries WS_GROUP so the rows are independent
     // radio groups; the OK button's WS_GROUP closes the last row.
     for (row, (rect, _device)) in monitors.iter().enumerate() {
-        let y = 80 + row as i16 * row_h;
+        let y = 97 + row as i16 * row_h;
         let base = 200 + row as u16 * 4;
         let w = rect.right - rect.left;
         let h = rect.bottom - rect.top;
@@ -142,7 +148,7 @@ fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
         b.item_atom(BS_AUTORADIOBUTTON as u32, 242, y, 42, 10, base + 3, 0x0080, "World");
     }
 
-    let by = 87 + rows as i16 * row_h;
+    let by = 104 + rows as i16 * row_h;
     b.item_atom(
         BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0 | WS_GROUP.0,
         97, by, 50, 14, IDOK.0 as u16, 0x0080, "OK",
@@ -165,6 +171,8 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             // Slider is 0..10; INI stores slider x 10 (0..100), like FlipIt.
             let _ = SendDlgItemMessageW(hwnd, IDC_SCALE, TBM_SETRANGE, WPARAM(1), LPARAM(10 << 16));
             let _ = SendDlgItemMessageW(hwnd, IDC_SCALE, TBM_SETPOS, WPARAM(1), LPARAM((settings.scale / 10) as isize));
+            let _ = SendDlgItemMessageW(hwnd, IDC_BOARDSCALE, TBM_SETRANGE, WPARAM(1), LPARAM(10 << 16));
+            let _ = SendDlgItemMessageW(hwnd, IDC_BOARDSCALE, TBM_SETPOS, WPARAM(1), LPARAM((settings.board_scale / 10) as isize));
             let _ = CheckDlgButton(
                 hwnd,
                 IDC_FLIP,
@@ -192,6 +200,8 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let pos = SendDlgItemMessageW(hwnd, IDC_SCALE, TBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
                 ctx.0.display_24hr = IsDlgButtonChecked(hwnd, IDC_24H) == 1;
                 ctx.0.scale = pos * 10;
+                let bpos = SendDlgItemMessageW(hwnd, IDC_BOARDSCALE, TBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
+                ctx.0.board_scale = bpos * 10;
                 ctx.0.flip_animation = IsDlgButtonChecked(hwnd, IDC_FLIP) == 1;
                 // Only present monitors are touched; absent sections in the
                 // map are left as-is and preserved on save.
