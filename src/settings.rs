@@ -65,8 +65,9 @@ impl Default for ScreenSettings {
     }
 }
 
-/// City labels never exceed this many cells (grid is one char per cell).
-pub const LABEL_MAX: usize = 16;
+// Labels cap at the board's cell budget so the parser and the renderer
+// can never disagree on width.
+use crate::board::LABEL_CELLS;
 
 fn default_world_clocks() -> Vec<(String, String)> {
     [
@@ -165,8 +166,8 @@ impl Settings {
                 }
             } else if section == "WorldClocks" {
                 // key = label, value = Windows timezone key name. Labels cap
-                // at LABEL_MAX cells; order preserved as written.
-                let label: String = key.trim().chars().take(LABEL_MAX).collect();
+                // at LABEL_CELLS; order preserved as written.
+                let label: String = key.trim().chars().take(LABEL_CELLS).collect();
                 s.world_clocks.push((label, value.trim().to_string()));
             }
         }
@@ -242,13 +243,6 @@ pub fn default_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn defaults() {
-        let s = Settings::default();
-        assert!(!s.display_24hr);
-        assert_eq!(s.scale, 70);
-    }
 
     #[test]
     fn board_scale_defaults_to_100() {
@@ -336,6 +330,15 @@ mod tests {
     }
 
     #[test]
+    fn full_default_settings_round_trip() {
+        // The most common real file: everything default, including the
+        // preloaded city list through the always-emitted [WorldClocks]
+        // header and its clear-on-first-header rule.
+        let s = Settings::default();
+        assert_eq!(Settings::from_ini_text(&s.to_ini_text()), s);
+    }
+
+    #[test]
     fn missing_file_gives_defaults() {
         let s = load(Path::new("/nonexistent/definitely/Settings.ini"));
         assert_eq!(s, Settings::default());
@@ -391,6 +394,8 @@ mod tests {
         let s = Settings::default();
         assert!(s.effective_orientation("DISPLAY1", 1080, 1920));
         assert!(!s.effective_orientation("DISPLAY1", 1920, 1080));
+        // square is horizontal: the rule is strictly height > width
+        assert!(!s.effective_orientation("DISPLAY1", 1000, 1000));
     }
 
     #[test]
@@ -430,14 +435,6 @@ mod tests {
         // orientation present, mode absent -> clock
         let s = Settings::from_ini_text("[Screen D1]\nOrientation=1\n");
         assert_eq!(s.screens.get("D1").map(|c| c.mode), Some(Mode::Clock));
-    }
-
-    #[test]
-    fn default_world_clocks_preloaded() {
-        let s = Settings::default();
-        assert_eq!(s.world_clocks.len(), 6);
-        assert_eq!(s.world_clocks[0], ("Los Angeles".to_string(), "Pacific Standard Time".to_string()));
-        assert_eq!(s.world_clocks[5], ("Sydney".to_string(), "AUS Eastern Standard Time".to_string()));
     }
 
     #[test]

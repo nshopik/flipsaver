@@ -168,7 +168,6 @@ pub struct WindowState {
     pub settings: Settings,
     pub gfx: std::rc::Rc<Gfx>,
     pub target: Option<ID2D1HwndRenderTarget>,
-    pub flip_enabled: bool,
     pub device: String,
     pub mode: Mode,
 }
@@ -449,7 +448,6 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                         let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                 }
-                crate::perf::log_first_frame();
             }
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
@@ -474,11 +472,11 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             let (h, m) = (st.wHour as u32, st.wMinute as u32);
                             let primed = *shown != (61, 61);
                             let mut started = false;
-                            if primed && h != shown.0 && state.flip_enabled {
+                            if primed && h != shown.0 && state.settings.flip_animation {
                                 *hours_anim = Some(Anim { from: shown.0, to: h, start_ms: now });
                                 started = true;
                             }
-                            if primed && m != shown.1 && state.flip_enabled {
+                            if primed && m != shown.1 && state.settings.flip_animation {
                                 *minutes_anim = Some(Anim { from: shown.1, to: m, start_ms: now });
                                 started = true;
                             }
@@ -497,7 +495,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                                 let old: Vec<char> = cells.iter().map(|c| c.glyph).collect();
                                 let changed = crate::board::diff_cells(&old, &next);
                                 if !changed.is_empty() {
-                                    if state.flip_enabled {
+                                    if state.settings.flip_animation {
                                         for &i in &changed {
                                             cells[i].anim = Some(CellAnim {
                                                 from: cells[i].glyph,
@@ -580,7 +578,6 @@ pub fn run_fullscreen(settings: Settings) {
                 WindowState {
                     is_preview: false,
                     mouse: None,
-                    flip_enabled: settings.flip_animation,
                     settings: settings.clone(),
                     gfx: gfx.clone(),
                     target: None,
@@ -617,7 +614,6 @@ pub fn run_preview(settings: Settings, parent: isize) {
         // Same draw path as /s, including the 1 s timer, so the preview
         // minute stays live. Input-exit is disabled via is_preview; the
         // control panel terminates the process by destroying the parent.
-        let flip_enabled = settings.flip_animation;
         create_saver_window(
             instance,
             WS_CHILD,
@@ -630,7 +626,6 @@ pub fn run_preview(settings: Settings, parent: isize) {
                 settings,
                 gfx,
                 target: None,
-                flip_enabled,
                 device: String::new(),
                 mode: Mode::Clock { cache: None, shown: (61, 61), hours_anim: None, minutes_anim: None },
             },

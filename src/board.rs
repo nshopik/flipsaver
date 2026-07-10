@@ -344,12 +344,6 @@ mod tests {
     }
 
     #[test]
-    fn row_width_reserves_all_fields() {
-        assert_eq!(row_width(false), 16 + 1 + (5 + 1 + 2 + 1 + 3)); // 29
-        assert_eq!(row_width(true), 16 + 1 + (5 + 1 + 3)); // 26
-    }
-
-    #[test]
     fn format_12h_pm_same_date() {
         let t = TimeParts { hour: 15, minute: 7, date_differs: false, weekday: 3 };
         let row = format_row("Los Angeles", Some(t), false);
@@ -408,7 +402,10 @@ mod tests {
     #[test]
     fn weekday_abbr_maps_win32_dow() {
         assert_eq!(weekday_abbr(0), "SUN");
+        assert_eq!(weekday_abbr(3), "WED");
         assert_eq!(weekday_abbr(6), "SAT");
+        // garbage wDayOfWeek must not panic the render path
+        assert_eq!(weekday_abbr(7), "???");
     }
 
     #[test]

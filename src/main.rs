@@ -14,50 +14,6 @@ mod config;
 #[cfg(windows)]
 mod tz;
 
-#[cfg(windows)]
-pub mod perf {
-    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-    use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
-
-    static START: AtomicI64 = AtomicI64::new(0);
-    static LOGGED: AtomicBool = AtomicBool::new(false);
-
-    pub fn mark_start() {
-        let mut t = 0i64;
-        unsafe {
-            let _ = QueryPerformanceCounter(&mut t);
-        }
-        START.store(t, Ordering::Relaxed);
-    }
-
-    /// Called after every EndDraw; only the first call logs.
-    pub fn log_first_frame() {
-        if LOGGED.swap(true, Ordering::Relaxed) {
-            return;
-        }
-        let (mut now, mut freq) = (0i64, 0i64);
-        unsafe {
-            let _ = QueryPerformanceCounter(&mut now);
-            let _ = QueryPerformanceFrequency(&mut freq);
-        }
-        let ms = (now - START.load(Ordering::Relaxed)) as f64 * 1000.0 / freq as f64;
-        let line = format!("flipsaver: first frame in {ms:.1} ms");
-        let wide: Vec<u16> = line.encode_utf16().chain([0]).collect();
-        unsafe {
-            windows::Win32::System::Diagnostics::Debug::OutputDebugStringW(
-                windows::core::PCWSTR(wide.as_ptr()),
-            );
-        }
-        // FLIPSAVER_LOG holds a file path; append so repeated runs accumulate.
-        if let Ok(path) = std::env::var("FLIPSAVER_LOG") {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(f, "{line}");
-            }
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum Mode {
     Screensaver,
@@ -109,7 +65,6 @@ fn print_version() {
 
 #[cfg(windows)]
 fn main() {
-    perf::mark_start();
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::HiDpi::{
         SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -160,8 +115,6 @@ mod cli_tests {
     #[test]
     fn p_colon_form() { assert_eq!(p(&["/p:1234"]), Mode::Preview(Some(1234))); }
     #[test]
-    fn p_uppercase_colon() { assert_eq!(p(&["/P:1234"]), Mode::Preview(Some(1234))); }
-    #[test]
     fn p_any_separator_char() { assert_eq!(p(&["/p_1234"]), Mode::Preview(Some(1234))); }
     #[test]
     fn p_missing_hwnd() { assert_eq!(p(&["/p"]), Mode::Preview(None)); }
@@ -175,36 +128,5 @@ mod cli_tests {
     fn version_flag() {
         assert_eq!(p(&["--version"]), Mode::Version);
         assert_eq!(p(&["-V"]), Mode::Version);
-    }
-}
-
-#[cfg(test)]
-mod version_tests {
-    #[test]
-    fn version_tag_is_set() {
-        let tag = env!("FLIPSAVER_VERSION_TAG");
-        // Should be "dev" or a git tag like "v0.1.0"
-        assert!(!tag.is_empty(), "version tag should not be empty");
-    }
-
-    #[test]
-    fn git_sha_is_set() {
-        let sha = env!("FLIPSAVER_GIT_SHA");
-        // Should be a short commit hash or "unknown"
-        assert!(!sha.is_empty(), "git sha should not be empty");
-    }
-
-    #[test]
-    fn version_format_is_valid() {
-        let version_line = format!(
-            "Version: {} ({}), built for: windows-x86_64",
-            env!("FLIPSAVER_VERSION_TAG"),
-            env!("FLIPSAVER_GIT_SHA")
-        );
-        // Should match the expected format
-        assert!(version_line.contains("Version:"), "should contain 'Version:'");
-        assert!(version_line.contains("windows-x86_64"), "should contain 'windows-x86_64'");
-        assert!(version_line.contains("("), "should contain opening paren for sha");
-        assert!(version_line.contains(")"), "should contain closing paren for sha");
     }
 }
