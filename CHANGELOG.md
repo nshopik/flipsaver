@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Default world-clock cities**: now eight (Los Angeles, New York,
+  London, Frankfurt, Moscow, Mumbai, Singapore, Tokyo); replaces the
+  previous six. Existing `[WorldClocks]` sections are unaffected.
+
 ## [0.2.0] - 2026-07-07
 
 ### Added

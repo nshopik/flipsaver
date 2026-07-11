@@ -74,9 +74,11 @@ fn default_world_clocks() -> Vec<(String, String)> {
         ("Los Angeles", "Pacific Standard Time"),
         ("New York", "Eastern Standard Time"),
         ("London", "GMT Standard Time"),
-        ("Dubai", "Arabian Standard Time"),
+        ("Frankfurt", "W. Europe Standard Time"),
+        ("Moscow", "Russian Standard Time"),
+        ("Mumbai", "India Standard Time"),
+        ("Singapore", "Singapore Standard Time"),
         ("Tokyo", "Tokyo Standard Time"),
-        ("Sydney", "AUS Eastern Standard Time"),
     ]
     .iter()
     .map(|(c, z)| (c.to_string(), z.to_string()))
@@ -440,7 +442,7 @@ mod tests {
     #[test]
     fn absent_worldclocks_section_keeps_defaults() {
         let s = Settings::from_ini_text("[General]\nScale=70\n");
-        assert_eq!(s.world_clocks.len(), 6);
+        assert_eq!(s.world_clocks.len(), 8);
     }
 
     #[test]
