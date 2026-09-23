@@ -44,16 +44,7 @@ pub fn row_width(is_24h: bool) -> usize {
 }
 
 pub fn weekday_abbr(dow: u8) -> &'static str {
-    match dow {
-        0 => "SUN",
-        1 => "MON",
-        2 => "TUE",
-        3 => "WED",
-        4 => "THU",
-        5 => "FRI",
-        6 => "SAT",
-        _ => "???",
-    }
+    ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].get(dow as usize).copied().unwrap_or("???")
 }
 
 /// The changed cell indices between two equal-length rows. City-name cells
@@ -67,35 +58,13 @@ pub fn diff_cells(old: &[char], new: &[char]) -> Vec<usize> {
         .collect()
 }
 
-fn push_str_field(row: &mut Vec<char>, s: &str, width: usize, right: bool) {
-    let chars: Vec<char> = s.chars().take(width).collect();
-    let pad = width - chars.len();
-    if right {
-        for _ in 0..pad {
-            row.push(' ');
-        }
-    }
-    row.extend(chars);
-    if !right {
-        for _ in 0..pad {
-            row.push(' ');
-        }
-    }
-}
-
-/// 12h: `H:MM` (hour 1..12, no leading zero); 24h: `HH:MM`. Right-justified
-/// in 5 cells either way. `None` renders the unresolved-zone placeholder.
+/// 12h: `H:MM` (hour 1..12, no leading zero); 24h: `HH:MM`. `None` renders
+/// the unresolved-zone placeholder.
 fn time_field(t: Option<TimeParts>, is_24h: bool) -> String {
     match t {
         None => "--:--".to_string(),
         Some(t) if is_24h => format!("{:02}:{:02}", t.hour, t.minute),
-        Some(t) => {
-            let h12 = match t.hour % 12 {
-                0 => 12,
-                h => h,
-            };
-            format!("{}:{:02}", h12, t.minute)
-        }
+        Some(t) => format!("{}:{:02}", crate::clock::h12(t.hour), t.minute),
     }
 }
 
@@ -104,25 +73,21 @@ fn time_field(t: Option<TimeParts>, is_24h: bool) -> String {
 /// grid geometry is stable. `time == None` is an unresolved timezone:
 /// label + `--:--`, all other fields blank.
 pub fn format_row(label: &str, time: Option<TimeParts>, is_24h: bool) -> Vec<char> {
-    let mut row: Vec<char> = Vec::with_capacity(row_width(is_24h));
-    push_str_field(&mut row, &label.to_uppercase(), LABEL_CELLS, false);
-    row.push(' ');
-    push_str_field(&mut row, &time_field(time, is_24h), 5, true);
+    let mut row = format!("{:<w$.w$} {:>5}", label.to_uppercase(), time_field(time, is_24h), w = LABEL_CELLS);
     if !is_24h {
-        row.push(' ');
         let ampm = match time {
             Some(t) if t.hour >= 12 => "PM",
             Some(_) => "AM",
             None => "",
         };
-        push_str_field(&mut row, ampm, 2, false);
+        row += &format!(" {ampm:<2}");
     }
-    row.push(' ');
     let day = match time {
         Some(t) if t.date_differs => weekday_abbr(t.weekday),
         _ => "",
     };
-    push_str_field(&mut row, day, 3, false);
+    row += &format!(" {day:<3}");
+    let row: Vec<char> = row.chars().collect();
     debug_assert_eq!(row.len(), row_width(is_24h));
     row
 }
@@ -154,20 +119,12 @@ pub fn compute_grid(width: i32, height: i32, scale_percent: i32, city_count: usi
 #[cfg(windows)]
 pub mod draw {
     use super::Grid;
+    use crate::clock::draw::color;
     use crate::screensaver::Gfx;
     use windows::core::*;
     use windows::Win32::Graphics::Direct2D::Common::*;
     use windows::Win32::Graphics::Direct2D::*;
     use windows::Win32::Graphics::DirectWrite::*;
-
-    fn color(rgb: u32) -> D2D1_COLOR_F {
-        D2D1_COLOR_F {
-            r: ((rgb >> 16) & 0xFF) as f32 / 255.0,
-            g: ((rgb >> 8) & 0xFF) as f32 / 255.0,
-            b: (rgb & 0xFF) as f32 / 255.0,
-            a: 1.0,
-        }
-    }
 
     /// Cached device-dependent board resources. Brushes and the cell text
     /// format survive across frames; only the glyph text layouts are built
@@ -307,7 +264,6 @@ pub mod draw {
         now_ms: u64,
     ) -> Result<()> {
         unsafe {
-            rt.Clear(Some(&color(0x000000)));
             let cols = cache.grid.cols;
             for row in 0..cache.grid.rows {
                 for col in 0..cols {
@@ -318,8 +274,7 @@ pub mod draw {
                     };
                     match &cell.anim {
                         Some(a) => {
-                            let progress =
-                                now_ms.saturating_sub(a.start_ms) as f64 / crate::clock::FLIP_MS;
+                            let progress = a.progress(now_ms);
                             if progress >= 1.0 {
                                 cache.draw_cell(rt, col, row, a.to)?;
                             } else {
@@ -373,7 +328,7 @@ mod tests {
         let same = TimeParts { hour: 9, minute: 0, date_differs: false, weekday: 2 };
         let diff = TimeParts { hour: 9, minute: 0, date_differs: true, weekday: 2 };
         assert!(!s(&format_row("X", Some(same), true)).contains("TUE"));
-        assert!(s(&format_row("X", Some(diff), true)).contains("TUE"));
+        assert_eq!(s(&format_row("X", Some(diff), true)), "X                09:00 TUE");
     }
 
     #[test]

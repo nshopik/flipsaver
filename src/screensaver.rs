@@ -10,15 +10,15 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::SystemInformation::{GetLocalTime, GetSystemTime, GetTickCount64};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS_NAME: PCWSTR = w!("flipsaverwnd");
 
 static OSWALD_BOLD: &[u8] = include_bytes!("../assets/Oswald-Bold.ttf");
 
-/// Resolved font: system Helvetica LT Std Cond when installed, else the
-/// embedded Oswald collection. Weight is always Bold; stretch differs
-/// (the typographic "Helvetica LT Std" family needs Condensed).
+/// Resolved font: the first installed SYSTEM_FONTS family, else the
+/// embedded Oswald collection. Weight is always Bold.
 pub struct FontChoice {
     /// None means system font collection (or last-resort Segoe UI).
     pub collection: Option<IDWriteFontCollection1>,
@@ -50,13 +50,8 @@ impl Gfx {
     /// family name only — the font itself never ships with the binary);
     /// otherwise load the embedded Oswald.
     unsafe fn pick_font(dwrite: &IDWriteFactory5) -> FontChoice {
-        if let Some(c) = probe_system_font(dwrite) {
-            let stretch = if c.condensed {
-                DWRITE_FONT_STRETCH_CONDENSED
-            } else {
-                DWRITE_FONT_STRETCH_NORMAL
-            };
-            return FontChoice { collection: None, family: c.family, stretch };
+        if let Some((family, stretch)) = probe_system_font(dwrite) {
+            return FontChoice { collection: None, family, stretch };
         }
         match Self::load_embedded_font(dwrite) {
             Ok(fonts) => FontChoice {
@@ -94,14 +89,22 @@ impl Gfx {
     }
 }
 
+/// Probe order, most preferred first. The WSS family "Helvetica LT Std Cond"
+/// already is the condensed face; the typographic family "Helvetica LT Std"
+/// needs Condensed stretch to select it.
+const SYSTEM_FONTS: [(&str, DWRITE_FONT_STRETCH); 2] = [
+    ("Helvetica LT Std Cond", DWRITE_FONT_STRETCH_NORMAL),
+    ("Helvetica LT Std", DWRITE_FONT_STRETCH_CONDENSED),
+];
+
 /// First preferred family present in the system collection, by name only.
-unsafe fn probe_system_font(dwrite: &IDWriteFactory5) -> Option<&'static crate::fontsel::Candidate> {
+unsafe fn probe_system_font(dwrite: &IDWriteFactory5) -> Option<(&'static str, DWRITE_FONT_STRETCH)> {
     let mut sys: Option<IDWriteFontCollection1> = None;
     // No downloadable fonts: only locally installed families count.
     dwrite.GetSystemFontCollection(false, &mut sys, false).ok()?;
     let sys = sys?;
-    crate::fontsel::pick(|family| {
-        let name = HSTRING::from(family);
+    SYSTEM_FONTS.iter().copied().find(|(family, _)| {
+        let name = HSTRING::from(*family);
         let (mut index, mut exists) = (0u32, BOOL::default());
         sys.FindFamilyName(&name, &mut index, &mut exists).is_ok() && exists.as_bool()
     })
@@ -113,7 +116,7 @@ pub fn font_display_name() -> &'static str {
     unsafe {
         let dwrite: Result<IDWriteFactory5> = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED);
         match dwrite {
-            Ok(d) => probe_system_font(&d).map(|c| c.family).unwrap_or("Oswald (embedded)"),
+            Ok(d) => probe_system_font(&d).map(|(family, _)| family).unwrap_or("Oswald (embedded)"),
             Err(_) => "Oswald (embedded)",
         }
     }
@@ -126,24 +129,25 @@ pub fn debug_log(line: &str) {
     }
 }
 
-/// A box's in-flight flip: old value folding to the new one since start_ms.
-pub struct Anim {
-    pub from: u32,
-    pub to: u32,
+/// An in-flight flip: old value (clock hour/minute or board glyph) folding
+/// to the new one since start_ms.
+pub struct Anim<T> {
+    pub from: T,
+    pub to: T,
     pub start_ms: u64,
 }
 
-/// A cell's in-flight flip: old glyph folding to new since start_ms.
-pub struct CellAnim {
-    pub from: char,
-    pub to: char,
-    pub start_ms: u64,
+impl<T> Anim<T> {
+    /// Fold progress at `now_ms`; >= 1.0 means finished.
+    pub fn progress(&self, now_ms: u64) -> f64 {
+        now_ms.saturating_sub(self.start_ms) as f64 / crate::clock::FLIP_MS
+    }
 }
 
 /// A board cell's rendered glyph, with room for an in-flight flip.
 pub struct CellState {
     pub glyph: char,
-    pub anim: Option<CellAnim>,
+    pub anim: Option<Anim<char>>,
 }
 
 /// Per-window render mode, decided once at creation.
@@ -152,8 +156,8 @@ pub enum Mode {
         cache: Option<crate::clock::draw::FaceCache>,
         /// (61,61) is the not-yet-primed sentinel.
         shown: (u32, u32),
-        hours_anim: Option<Anim>,
-        minutes_anim: Option<Anim>,
+        hours_anim: Option<Anim<u32>>,
+        minutes_anim: Option<Anim<u32>>,
     },
     Board {
         zones: Vec<crate::tz::Zone>,
@@ -172,17 +176,10 @@ pub struct WindowState {
     pub mode: Mode,
 }
 
-/// Machine-local full SYSTEMTIME (for hour/minute, date-differs and the UTC
-/// used by tz conversion).
-fn local_now() -> SYSTEMTIME {
-    unsafe { windows::Win32::System::SystemInformation::GetLocalTime() }
-}
-
 /// Current row-major glyph grid for a board, from its resolved zones. One
 /// GetSystemTime feeds every zone. Unresolved zones render as `--:--`.
 fn board_cells(zones: &[crate::tz::Zone], grid: &crate::board::Grid, is_24h: bool) -> Vec<char> {
-    let utc = unsafe { windows::Win32::System::SystemInformation::GetSystemTime() };
-    let now = local_now();
+    let (utc, now) = unsafe { (GetSystemTime(), GetLocalTime()) };
     let mut cells: Vec<char> = Vec::with_capacity(grid.rows * grid.cols);
     for zone in zones.iter().take(grid.rows) {
         let parts = zone
@@ -388,7 +385,8 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 let w = rc.right - rc.left;
                 let h = rc.bottom - rc.top;
                 rt.BeginDraw();
-                let now = windows::Win32::System::SystemInformation::GetTickCount64();
+                rt.Clear(Some(&crate::clock::draw::color(0x000000)));
+                let now = GetTickCount64();
                 let is_24h = state.settings.display_24hr;
                 match &mut state.mode {
                     Mode::Clock { cache, shown, hours_anim, minutes_anim } => {
@@ -399,19 +397,14 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             )
                             .ok();
                         }
-                        match cache {
-                            Some(face) => {
-                                if *shown == (61, 61) {
-                                    let st = local_now();
-                                    *shown = (st.wHour as u32, st.wMinute as u32);
-                                }
-                                let _ = crate::clock::draw::draw_face(
-                                    &rt, face, *shown, hours_anim.as_ref(), minutes_anim.as_ref(), now,
-                                );
+                        if let Some(face) = cache {
+                            if *shown == (61, 61) {
+                                let st = GetLocalTime();
+                                *shown = (st.wHour as u32, st.wMinute as u32);
                             }
-                            None => {
-                                rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
-                            }
+                            let _ = crate::clock::draw::draw_face(
+                                &rt, face, *shown, hours_anim.as_ref(), minutes_anim.as_ref(), now,
+                            );
                         }
                     }
                     Mode::Board { zones, cache, cells } => {
@@ -428,13 +421,8 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                                     .collect();
                             }
                         }
-                        match cache {
-                            Some(bc) => {
-                                let _ = crate::board::draw::draw_board(&rt, bc, cells, now);
-                            }
-                            None => {
-                                rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }));
-                            }
+                        if let Some(bc) = cache {
+                            let _ = crate::board::draw::draw_board(&rt, bc, cells, now);
                         }
                     }
                 }
@@ -463,12 +451,12 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             LRESULT(0)
         }
         WM_TIMER => {
-            let now = windows::Win32::System::SystemInformation::GetTickCount64();
+            let now = GetTickCount64();
             match wp.0 {
                 1 => {
                     match &mut state.mode {
                         Mode::Clock { shown, hours_anim, minutes_anim, .. } => {
-                            let st = local_now();
+                            let st = GetLocalTime();
                             let (h, m) = (st.wHour as u32, st.wMinute as u32);
                             let primed = *shown != (61, 61);
                             let mut started = false;
@@ -497,7 +485,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                                 if !changed.is_empty() {
                                     if state.settings.flip_animation {
                                         for &i in &changed {
-                                            cells[i].anim = Some(CellAnim {
+                                            cells[i].anim = Some(Anim {
                                                 from: cells[i].glyph,
                                                 to: next[i],
                                                 start_ms: now,
@@ -522,11 +510,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                     let mut any_active = false;
                     match &mut state.mode {
                         Mode::Clock { hours_anim, minutes_anim, .. } => {
-                            let done = |a: &Option<Anim>| {
-                                a.as_ref().map_or(true, |x| {
-                                    now.saturating_sub(x.start_ms) as f64 / crate::clock::FLIP_MS >= 1.0
-                                })
-                            };
+                            let done = |a: &Option<Anim<u32>>| a.as_ref().map_or(true, |x| x.progress(now) >= 1.0);
                             if done(hours_anim) {
                                 *hours_anim = None;
                             }
@@ -538,7 +522,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                         Mode::Board { cells, .. } => {
                             for c in cells.iter_mut() {
                                 if let Some(a) = &c.anim {
-                                    if now.saturating_sub(a.start_ms) as f64 / crate::clock::FLIP_MS >= 1.0 {
+                                    if a.progress(now) >= 1.0 {
                                         c.anim = None;
                                     } else {
                                         any_active = true;
@@ -557,6 +541,14 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             }
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
+    }
+}
+
+unsafe fn pump() {
+    let mut msg = MSG::default();
+    while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        let _ = TranslateMessage(&msg);
+        DispatchMessageW(&msg);
     }
 }
 
@@ -586,11 +578,7 @@ pub fn run_fullscreen(settings: Settings) {
                 },
             );
         }
-        let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
+        pump();
     }
 }
 
@@ -623,17 +611,13 @@ pub fn run_preview(settings: Settings, parent: isize) {
             WindowState {
                 is_preview: true,
                 mouse: None,
-                settings,
                 gfx,
                 target: None,
                 device: String::new(),
+                settings,
                 mode: Mode::Clock { cache: None, shown: (61, 61), hours_anim: None, minutes_anim: None },
             },
         );
-        let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
+        pump();
     }
 }

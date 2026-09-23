@@ -4,11 +4,12 @@ use std::path::{Path, PathBuf};
 const DEFAULT_SCALE: i32 = 70;
 const DEFAULT_BOARD_SCALE: i32 = 100;
 
+/// Discriminants are the INI values; do not renumber.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
-    Auto,
-    Horizontal,
-    Vertical,
+    Auto = 0,
+    Horizontal = 1,
+    Vertical = 2,
 }
 
 impl Orientation {
@@ -20,20 +21,13 @@ impl Orientation {
             _ => Orientation::Auto,
         }
     }
-
-    pub fn to_ini(self) -> i32 {
-        match self {
-            Orientation::Auto => 0,
-            Orientation::Horizontal => 1,
-            Orientation::Vertical => 2,
-        }
-    }
 }
 
+/// Discriminants are the INI values; do not renumber.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    Clock,
-    World,
+    Clock = 0,
+    World = 1,
 }
 
 impl Mode {
@@ -42,13 +36,6 @@ impl Mode {
         match v {
             1 => Mode::World,
             _ => Mode::Clock,
-        }
-    }
-
-    pub fn to_ini(self) -> i32 {
-        match self {
-            Mode::Clock => 0,
-            Mode::World => 1,
         }
     }
 }
@@ -193,8 +180,8 @@ impl Settings {
             out.push_str(&format!(
                 "[Screen {}]\r\nOrientation={}\r\nMode={}\r\n\r\n",
                 name,
-                sc.orientation.to_ini(),
-                sc.mode.to_ini(),
+                sc.orientation as i32,
+                sc.mode as i32,
             ));
         }
         // Always emit the header; an empty body round-trips to "no cities".
@@ -323,10 +310,8 @@ mod tests {
         let s = Settings {
             display_24hr: true,
             scale: 90,
-            board_scale: 100,
-            flip_animation: true,
-            screens: std::collections::BTreeMap::new(),
             world_clocks: Vec::new(),
+            ..Settings::default()
         };
         assert_eq!(Settings::from_ini_text(&s.to_ini_text()), s);
     }
@@ -355,10 +340,8 @@ mod tests {
         let s = Settings {
             display_24hr: true,
             scale: 20,
-            board_scale: 100,
-            flip_animation: true,
-            screens: std::collections::BTreeMap::new(),
             world_clocks: Vec::new(),
+            ..Settings::default()
         };
         save(&path, &s).unwrap();
         assert_eq!(load(&path), s);
@@ -417,10 +400,8 @@ mod tests {
         let mut s = Settings {
             display_24hr: true,
             scale: 40,
-            board_scale: 100,
-            flip_animation: true,
-            screens: std::collections::BTreeMap::new(),
             world_clocks: Vec::new(),
+            ..Settings::default()
         };
         s.screens.insert("DISPLAY1".into(), ScreenSettings { orientation: Orientation::Horizontal, mode: Mode::Clock });
         s.screens.insert("DISPLAY9".into(), ScreenSettings { orientation: Orientation::Auto, mode: Mode::World });
