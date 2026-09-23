@@ -112,21 +112,25 @@ pub fn compute(
     }
 }
 
-pub fn format_time(hour: u32, minute: u32, is_24h: bool) -> (String, String, Option<Marker>) {
-    let minute_s = format!("{minute:02}");
-    if is_24h {
-        (format!("{hour:02}"), minute_s, None)
-    } else {
-        let h12 = match hour % 12 {
-            0 => 12,
-            h => h,
-        };
-        let marker = if hour >= 12 { Marker::Pm } else { Marker::Am };
-        (h12.to_string(), minute_s, Some(marker))
+pub fn h12(hour: u32) -> u32 {
+    match hour % 12 {
+        0 => 12,
+        h => h,
     }
 }
 
-/// Total flip duration; `progress = elapsed_ms / FLIP_MS`.
+/// (digit string, marker) for a box given its value. Only the 12h hours
+/// box carries an AM/PM marker.
+pub fn box_text(is_hours: bool, value: u32, is_24h: bool) -> (String, Option<Marker>) {
+    if !is_hours || is_24h {
+        (format!("{value:02}"), None)
+    } else {
+        let marker = if value >= 12 { Marker::Pm } else { Marker::Am };
+        (h12(value).to_string(), Some(marker))
+    }
+}
+
+/// Total flip duration.
 pub const FLIP_MS: f64 = 600.0;
 const MAX_SHADE: f32 = 0.55;
 
@@ -173,7 +177,7 @@ pub fn flip_frame(progress: f64) -> FlipFrame {
 
 #[cfg(windows)]
 pub mod draw {
-    use super::{compute, flip_frame, format_time, BoxLayout, FlipFrame, Layout, Marker, Phase, Rect, FLIP_MS};
+    use super::{box_text, compute, flip_frame, BoxLayout, FlipFrame, Layout, Marker, Phase, Rect};
     use crate::screensaver::Gfx;
     use crate::settings::Settings;
     use windows::core::*;
@@ -182,7 +186,7 @@ pub mod draw {
     use windows::Win32::Graphics::DirectWrite::*;
     use windows_numerics::Matrix3x2;
 
-    fn color(rgb: u32) -> D2D1_COLOR_F {
+    pub(crate) fn color(rgb: u32) -> D2D1_COLOR_F {
         D2D1_COLOR_F {
             r: ((rgb >> 16) & 0xFF) as f32 / 255.0,
             g: ((rgb >> 8) & 0xFF) as f32 / 255.0,
@@ -263,18 +267,13 @@ pub mod draw {
     ) -> Result<()> {
         let top = D2D_RECT_F { left: rect.left, top: rect.top, right: rect.right, bottom: hinge };
         let bottom = D2D_RECT_F { left: rect.left, top: hinge, right: rect.right, bottom: rect.bottom };
-        match f.phase {
-            Phase::UpperFold => {
-                fold_clipped(rt, top, draw_new)?;
-                fold_clipped(rt, bottom, draw_old)?;
-                fold_leaf(rt, top, hinge, f.leaf_scale, shade, shade_rect, f.shade_alpha, draw_old)?;
-            }
-            Phase::LowerFall => {
-                fold_clipped(rt, top, draw_new)?;
-                fold_clipped(rt, bottom, draw_old)?;
-                fold_leaf(rt, bottom, hinge, f.leaf_scale, shade, shade_rect, f.shade_alpha, draw_new)?;
-            }
-        }
+        fold_clipped(rt, top, draw_new)?;
+        fold_clipped(rt, bottom, draw_old)?;
+        let (leaf, draw_leaf) = match f.phase {
+            Phase::UpperFold => (top, draw_old),
+            Phase::LowerFall => (bottom, draw_new),
+        };
+        fold_leaf(rt, leaf, hinge, f.leaf_scale, shade, shade_rect, f.shade_alpha, draw_leaf)?;
         rt.SetTransform(&Matrix3x2::identity());
         rt.DrawLine(
             windows_numerics::Vector2 { X: rect.left, Y: hinge },
@@ -461,17 +460,6 @@ pub mod draw {
             Ok(())
         }
 
-        /// (digit string, marker) for a box given its value. Markers ride the
-        /// hours box only; format_time derives them from the hour.
-        fn box_text(&self, is_hours: bool, value: u32) -> (String, Option<Marker>) {
-            if is_hours {
-                let (h, _m, marker) = format_time(value, 0, self.is_24h);
-                (h, marker)
-            } else {
-                (format_time(0, value, self.is_24h).1, None)
-            }
-        }
-
         /// Render one box: static when no anim (or finished), else the fold.
         unsafe fn draw_box_animated(
             &self,
@@ -479,21 +467,21 @@ pub mod draw {
             bl: &BoxLayout,
             is_hours: bool,
             settled: u32,
-            anim: Option<&crate::screensaver::Anim>,
+            anim: Option<&crate::screensaver::Anim<u32>>,
             now_ms: u64,
         ) -> Result<()> {
             match anim {
                 None => {
-                    let (t, m) = self.box_text(is_hours, settled);
+                    let (t, m) = box_text(is_hours, settled, self.is_24h);
                     self.draw_box(rt, bl, &t, m)
                 }
                 Some(a) => {
-                    let progress = now_ms.saturating_sub(a.start_ms) as f64 / FLIP_MS;
-                    let (new_t, new_m) = self.box_text(is_hours, a.to);
+                    let progress = a.progress(now_ms);
+                    let (new_t, new_m) = box_text(is_hours, a.to, self.is_24h);
                     if progress >= 1.0 {
                         self.draw_box(rt, bl, &new_t, new_m)
                     } else {
-                        let (old_t, old_m) = self.box_text(is_hours, a.from);
+                        let (old_t, old_m) = box_text(is_hours, a.from, self.is_24h);
                         let rect = rectf(bl.rect);
                         let hinge = bl.split_y as f32;
                         let shade_rect = D2D1_ROUNDED_RECT {
@@ -523,12 +511,11 @@ pub mod draw {
         rt: &ID2D1HwndRenderTarget,
         cache: &FaceCache,
         shown: (u32, u32),
-        hours_anim: Option<&crate::screensaver::Anim>,
-        minutes_anim: Option<&crate::screensaver::Anim>,
+        hours_anim: Option<&crate::screensaver::Anim<u32>>,
+        minutes_anim: Option<&crate::screensaver::Anim<u32>>,
         now_ms: u64,
     ) -> Result<()> {
         unsafe {
-            rt.Clear(Some(&color(0x000000)));
             cache.draw_box_animated(rt, &cache.layout.hours, true, shown.0, hours_anim, now_ms)?;
             cache.draw_box_animated(rt, &cache.layout.minutes, false, shown.1, minutes_anim, now_ms)?;
             Ok(())
@@ -599,17 +586,19 @@ mod tests {
     }
 
     #[test]
-    fn format_12h() {
-        assert_eq!(format_time(0, 5, false), ("12".into(), "05".into(), Some(Marker::Am)));
-        assert_eq!(format_time(11, 59, false), ("11".into(), "59".into(), Some(Marker::Am)));
-        assert_eq!(format_time(12, 0, false), ("12".into(), "00".into(), Some(Marker::Pm)));
-        assert_eq!(format_time(13, 7, false), ("1".into(), "07".into(), Some(Marker::Pm)));
+    fn box_text_12h() {
+        assert_eq!(box_text(true, 0, false), ("12".into(), Some(Marker::Am)));
+        assert_eq!(box_text(true, 11, false), ("11".into(), Some(Marker::Am)));
+        assert_eq!(box_text(true, 12, false), ("12".into(), Some(Marker::Pm)));
+        assert_eq!(box_text(true, 13, false), ("1".into(), Some(Marker::Pm)));
+        assert_eq!(box_text(false, 5, false), ("05".into(), None));
     }
 
     #[test]
-    fn format_24h() {
-        assert_eq!(format_time(0, 5, true), ("00".into(), "05".into(), None));
-        assert_eq!(format_time(23, 5, true), ("23".into(), "05".into(), None));
+    fn box_text_24h() {
+        assert_eq!(box_text(true, 0, true), ("00".into(), None));
+        assert_eq!(box_text(true, 23, true), ("23".into(), None));
+        assert_eq!(box_text(false, 7, true), ("07".into(), None));
     }
 
     #[test]

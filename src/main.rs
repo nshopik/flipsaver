@@ -2,7 +2,6 @@
 
 mod clock;
 mod board;
-mod fontsel;
 mod settings;
 
 #[cfg(windows)]

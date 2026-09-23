@@ -1,6 +1,6 @@
 use std::env;
-use std::fs::File;
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -33,9 +33,8 @@ fn find_llvm_rc() -> io::Result<String> {
 }
 
 fn embed_manifest_via_coff(out_dir: &PathBuf) -> io::Result<()> {
-    // Write manifest XML with PerMonitorV2 DPI + comctl32 v6 dependency.
-    // Version derived from CARGO_PKG_VERSION; floor is Windows 10 1703+ (spec requirement).
-    let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.1.0".to_string());
+    // Floor is Windows 10 1703+ (spec requirement).
+    let version = env!("CARGO_PKG_VERSION");
     let manifest_xml = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3" manifestVersion="1.0">
   <assemblyIdentity name="flipsaver" type="win32" version="{}.0"/>
@@ -66,21 +65,12 @@ fn embed_manifest_via_coff(out_dir: &PathBuf) -> io::Result<()> {
   </asmv3:trustInfo>
 </assembly>"#, version);
 
-    let manifest_path = out_dir.join("app.manifest");
-    let mut f = File::create(&manifest_path)?;
-    f.write_all(manifest_xml.as_bytes())?;
-    drop(f);
+    fs::write(out_dir.join("app.manifest"), manifest_xml)?;
 
-    // Write RC file: resource script with RT_MANIFEST (type 24) pointing to the manifest.
-    // Format: `<id> <type> "<filename>"`
-    let rc_script = r#"1 24 "app.manifest"
-"#;
+    // RT_MANIFEST is resource type 24; line format is `<id> <type> "<filename>"`.
     let rc_path = out_dir.join("app.rc");
-    let mut f = File::create(&rc_path)?;
-    f.write_all(rc_script.as_bytes())?;
-    drop(f);
+    fs::write(&rc_path, "1 24 \"app.manifest\"\n")?;
 
-    // Compile RC to COFF resource object via llvm-rc.
     let llvm_rc = find_llvm_rc()?;
     let out_res = out_dir.join("out.res");
     let status = Command::new(&llvm_rc)
@@ -117,19 +107,10 @@ fn main() {
     println!("cargo:rerun-if-changed=.git/refs");
     println!("cargo:rerun-if-changed=.git/packed-refs");
 
-    // Manifest (PMv2 DPI awareness + comctl32 v6 for the dialog) embedded as COFF resource.
-    // Use llvm-rc to compile manifest to .res; this works on all hosts and bypasses mt.exe.
-    // SetProcessDpiAwarenessContext at startup (main.rs) provides belt-and-braces fallback.
-
-    if std::env::var("CARGO_CFG_WINDOWS").is_ok() {
-        match env::var("OUT_DIR") {
-            Ok(out_dir) => {
-                let out_path = PathBuf::from(out_dir);
-                if let Err(e) = embed_manifest_via_coff(&out_path) {
-                    panic!("failed to embed manifest via llvm-rc: {}", e);
-                }
-            }
-            Err(_) => panic!("OUT_DIR env var not set"),
-        }
+    // Embed the manifest via llvm-rc (works on any host, no mt.exe); main.rs's
+    // SetProcessDpiAwarenessContext is the fallback.
+    if env::var("CARGO_CFG_WINDOWS").is_ok() {
+        let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+        embed_manifest_via_coff(&out_dir).expect("failed to embed manifest via llvm-rc");
     }
 }
