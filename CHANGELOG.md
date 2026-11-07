@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Preview shows the world-clock board** when the primary monitor is
+  set to World.
 - **Per-monitor settings survive `DISPLAYn` renumbering**: `[Screen …]`
   sections are keyed by the monitor's device interface path instead of
   the `DISPLAYn` name Windows can reassign. The path includes the GPU

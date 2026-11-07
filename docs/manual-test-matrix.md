@@ -41,7 +41,7 @@ same machine.
 | 30 | Invalid timezone ID row renders city + `--:--`, logged via OutputDebugString; other rows unaffected | |
 | 31 | Empty `[WorldClocks]` section (all cities deleted) → World monitor falls back to the clock | |
 | 32 | Board minute tick flips only changed cells (fold animation); `FlipAnimation` off → instant swap | |
-| 33 | Board on single monitor, and preview (`/p`) when primary is World | |
+| 33 | Board on single monitor; preview (`/p`) shows the board when the primary monitor is World, the clock otherwise | |
 | 34 | No grid reflow at midnight (day column always reserved) | |
 | 35 | Non-ASCII city label (e.g. `Zürich`) renders; label > 16 chars truncated | |
 | 36 | "World size" slider resizes the board only (clock size unaffected); persists as `BoardScale`; absent key → 100% | |
