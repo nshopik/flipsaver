@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error and keeps the dialog open when `Settings.ini` cannot be written.
 - **City labels over 16 characters** survive a settings-dialog save;
   the board still shows the first 16.
+- **Out-of-range `Scale` / `BoardScale`** in a hand-edited
+  `Settings.ini` is clamped to 0..100 instead of blanking the screen.
 - **UTF-8 BOM** at the start of `Settings.ini` no longer hides the
   first section.
 

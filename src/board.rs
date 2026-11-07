@@ -103,7 +103,7 @@ pub fn compute_grid(width: i32, height: i32, scale_percent: i32, city_count: usi
     let by_w = width / cols;
     let by_h = height / (rows + MARGIN_ROWS);
     let base = by_w.min(by_h).max(1);
-    let frac = 50 + scale_percent.clamp(0, 100) * 50 / 100;
+    let frac = 50 + scale_percent * 50 / 100;
     let cell = (base * frac / 100).max(1);
     let grid_w = cols * cell;
     let grid_h = rows * cell;
