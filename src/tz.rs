@@ -17,23 +17,27 @@ fn key_to_string(key: &[u16; 128]) -> String {
 }
 
 /// Find the zone whose `TimeZoneKeyName` matches `id` case-insensitively.
-/// Loops EnumDynamicTimeZoneInformation until ERROR_NO_MORE_ITEMS (259).
-/// `UTC` is a real Windows key and resolves through the same path.
+/// Enumerates until ERROR_NO_MORE_ITEMS; an index that fails to read is
+/// logged and skipped. `UTC` is a real Windows key and resolves through
+/// the same path.
 pub fn resolve(id: &str) -> Option<DYNAMIC_TIME_ZONE_INFORMATION> {
-    unsafe {
-        let mut i = 0u32;
-        loop {
-            let mut dtzi = DYNAMIC_TIME_ZONE_INFORMATION::default();
-            let rc = EnumDynamicTimeZoneInformation(i, &mut dtzi);
-            if rc == ERROR_NO_MORE_ITEMS.0 {
-                return None;
-            }
-            if rc == ERROR_SUCCESS.0 && key_to_string(&dtzi.TimeZoneKeyName).eq_ignore_ascii_case(id) {
-                return Some(dtzi);
-            }
-            i += 1;
+    // Windows ships ~140 zones; the cap ends the loop if the end marker
+    // never comes.
+    for i in 0..1024u32 {
+        let mut dtzi = DYNAMIC_TIME_ZONE_INFORMATION::default();
+        let rc = unsafe { EnumDynamicTimeZoneInformation(i, &mut dtzi) };
+        if rc == ERROR_NO_MORE_ITEMS.0 {
+            return None;
+        }
+        if rc != ERROR_SUCCESS.0 {
+            crate::screensaver::debug_log(&format!("flipsaver: timezone index {i} unreadable ({rc})"));
+            continue;
+        }
+        if key_to_string(&dtzi.TimeZoneKeyName).eq_ignore_ascii_case(id) {
+            return Some(dtzi);
         }
     }
+    None
 }
 
 /// Resolve every configured city; unmatched keys are logged and kept as
