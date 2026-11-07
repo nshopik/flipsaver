@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Settings.ini` is clamped to 0..100 instead of blanking the screen.
 - **Non-ASCII command-line argument** (e.g. `/é`) opens the settings
   dialog instead of crashing.
+- **Settings dialog is owned by the Control Panel window** passed in
+  `/c:HWND`, so a second dialog cannot open behind it.
 - **UTF-8 BOM** at the start of `Settings.ini` no longer hides the
   first section.
 

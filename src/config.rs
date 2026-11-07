@@ -248,8 +248,10 @@ unsafe fn error_box(owner: Option<HWND>, text: &str) {
     MessageBoxW(owner, &text, windows::core::w!("FlipSaver Settings"), MB_OK | MB_ICONERROR);
 }
 
-pub fn run_config() {
+pub fn run_config(owner: Option<isize>) {
     unsafe {
+        // An owner disables the Control Panel dialog while ours is open.
+        let owner = owner.map(|h| HWND(h as *mut core::ffi::c_void)).filter(|&h| IsWindow(Some(h)).as_bool());
         // Trackbar class lives in comctl32; v6 activation comes from the
         // embedded manifest (always present; compiled via llvm-rc at build time).
         let icc = INITCOMMONCONTROLSEX {
@@ -262,7 +264,7 @@ pub fn run_config() {
             Ok(s) => s,
             Err(e) => {
                 let text = format!("Cannot read {}: {e}\n\nFix or delete the file, then reopen settings.", path.display());
-                error_box(None, &text);
+                error_box(owner, &text);
                 return;
             }
         };
@@ -275,7 +277,7 @@ pub fn run_config() {
         let _ = DialogBoxIndirectParamW(
             Some(instance),
             template.as_ptr() as *const DLGTEMPLATE,
-            None,
+            owner,
             Some(dlgproc),
             LPARAM(&mut *ctx as *mut DlgCtx as isize),
         );

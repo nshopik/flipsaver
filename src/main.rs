@@ -16,14 +16,15 @@ mod tz;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Screensaver,
-    Config,
+    /// Owner window from `/c:HWND`, when given.
+    Config(Option<isize>),
     Preview(Option<isize>),
     Version,
 }
 
 pub fn parse_args(args: &[String]) -> Command {
     let Some(first_raw) = args.first() else {
-        return Command::Config;
+        return Command::Config(None);
     };
     if first_raw == "--version" || first_raw == "-V" {
         return Command::Version;
@@ -39,12 +40,14 @@ pub fn parse_args(args: &[String]) -> Command {
     } else {
         args.get(1).cloned()
     };
+    let hwnd = || second.as_deref().and_then(|s| s.parse::<i64>().ok()).map(|v| v as isize);
     match first.as_str() {
         "/s" => Command::Screensaver,
-        "/p" => Command::Preview(second.and_then(|s| s.parse::<i64>().ok()).map(|v| v as isize)),
-        // "/c" and unknown args both open config (declared deviation:
-        // original shows an error MessageBox for unknown args).
-        _ => Command::Config,
+        "/p" => Command::Preview(hwnd()),
+        "/c" => Command::Config(hwnd()),
+        // Unknown args open config too (declared deviation: original
+        // shows an error MessageBox for unknown args).
+        _ => Command::Config(None),
     }
 }
 
@@ -82,7 +85,7 @@ fn main() {
         Command::Screensaver => screensaver::run_fullscreen(settings()),
         Command::Preview(Some(parent)) => screensaver::run_preview(settings(), parent),
         Command::Preview(None) => {}          // declared deviation: exit 0 silently
-        Command::Config => config::run_config(),
+        Command::Config(owner) => config::run_config(owner),
         Command::Version => print_version(),
     }
 }
@@ -99,21 +102,22 @@ mod cli_tests {
     #[test]
     fn parse_args_table() {
         for (args, want) in [
-            (&[][..], Command::Config),
+            (&[][..], Command::Config(None)),
             (&["/s"][..], Command::Screensaver),
             (&["/S"][..], Command::Screensaver),
-            (&["/c"][..], Command::Config),
-            (&["/c:12345"][..], Command::Config),
+            (&["/c"][..], Command::Config(None)),
+            (&["/c:12345"][..], Command::Config(Some(12345))),
+            (&["/c", "12345"][..], Command::Config(Some(12345))),
             (&["/p", "1234"][..], Command::Preview(Some(1234))),
             (&["/p:1234"][..], Command::Preview(Some(1234))),
             (&["/p_1234"][..], Command::Preview(Some(1234))),
             (&["/p"][..], Command::Preview(None)),
             (&["/p", "abc"][..], Command::Preview(None)),
             (&["/p:"][..], Command::Preview(None)),
-            (&["/foo"][..], Command::Config),
+            (&["/foo"][..], Command::Config(None)),
             // Non-ASCII must not panic on a char boundary.
-            (&["/ü"][..], Command::Config),
-            (&["/é1"][..], Command::Config),
+            (&["/ü"][..], Command::Config(None)),
+            (&["/é1"][..], Command::Config(None)),
             (&["/sé"][..], Command::Screensaver),
             (&["/p€1234"][..], Command::Preview(Some(1234))),
             (&["--version"][..], Command::Version),
