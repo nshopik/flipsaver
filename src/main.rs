@@ -14,19 +14,19 @@ mod config;
 mod tz;
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Mode {
+pub enum Command {
     Screensaver,
     Config,
     Preview(Option<isize>),
     Version,
 }
 
-pub fn parse_args(args: &[String]) -> Mode {
+pub fn parse_args(args: &[String]) -> Command {
     let Some(first_raw) = args.first() else {
-        return Mode::Config;
+        return Command::Config;
     };
     if first_raw == "--version" || first_raw == "-V" {
-        return Mode::Version;
+        return Command::Version;
     }
     let lower = first_raw.to_lowercase();
     let lower = lower.trim();
@@ -40,11 +40,11 @@ pub fn parse_args(args: &[String]) -> Mode {
         args.get(1).cloned()
     };
     match first.as_str() {
-        "/s" => Mode::Screensaver,
-        "/p" => Mode::Preview(second.and_then(|s| s.parse::<i64>().ok()).map(|v| v as isize)),
+        "/s" => Command::Screensaver,
+        "/p" => Command::Preview(second.and_then(|s| s.parse::<i64>().ok()).map(|v| v as isize)),
         // "/c" and unknown args both open config (declared deviation:
         // original shows an error MessageBox for unknown args).
-        _ => Mode::Config,
+        _ => Command::Config,
     }
 }
 
@@ -79,11 +79,11 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let settings = || settings::load_or_default(&settings::default_path());
     match parse_args(&args) {
-        Mode::Screensaver => screensaver::run_fullscreen(settings()),
-        Mode::Preview(Some(parent)) => screensaver::run_preview(settings(), parent),
-        Mode::Preview(None) => {}          // declared deviation: exit 0 silently
-        Mode::Config => config::run_config(),
-        Mode::Version => print_version(),
+        Command::Screensaver => screensaver::run_fullscreen(settings()),
+        Command::Preview(Some(parent)) => screensaver::run_preview(settings(), parent),
+        Command::Preview(None) => {}          // declared deviation: exit 0 silently
+        Command::Config => config::run_config(),
+        Command::Version => print_version(),
     }
 }
 
@@ -99,25 +99,25 @@ mod cli_tests {
     #[test]
     fn parse_args_table() {
         for (args, want) in [
-            (&[][..], Mode::Config),
-            (&["/s"][..], Mode::Screensaver),
-            (&["/S"][..], Mode::Screensaver),
-            (&["/c"][..], Mode::Config),
-            (&["/c:12345"][..], Mode::Config),
-            (&["/p", "1234"][..], Mode::Preview(Some(1234))),
-            (&["/p:1234"][..], Mode::Preview(Some(1234))),
-            (&["/p_1234"][..], Mode::Preview(Some(1234))),
-            (&["/p"][..], Mode::Preview(None)),
-            (&["/p", "abc"][..], Mode::Preview(None)),
-            (&["/p:"][..], Mode::Preview(None)),
-            (&["/foo"][..], Mode::Config),
+            (&[][..], Command::Config),
+            (&["/s"][..], Command::Screensaver),
+            (&["/S"][..], Command::Screensaver),
+            (&["/c"][..], Command::Config),
+            (&["/c:12345"][..], Command::Config),
+            (&["/p", "1234"][..], Command::Preview(Some(1234))),
+            (&["/p:1234"][..], Command::Preview(Some(1234))),
+            (&["/p_1234"][..], Command::Preview(Some(1234))),
+            (&["/p"][..], Command::Preview(None)),
+            (&["/p", "abc"][..], Command::Preview(None)),
+            (&["/p:"][..], Command::Preview(None)),
+            (&["/foo"][..], Command::Config),
             // Non-ASCII must not panic on a char boundary.
-            (&["/ü"][..], Mode::Config),
-            (&["/é1"][..], Mode::Config),
-            (&["/sé"][..], Mode::Screensaver),
-            (&["/p€1234"][..], Mode::Preview(Some(1234))),
-            (&["--version"][..], Mode::Version),
-            (&["-V"][..], Mode::Version),
+            (&["/ü"][..], Command::Config),
+            (&["/é1"][..], Command::Config),
+            (&["/sé"][..], Command::Screensaver),
+            (&["/p€1234"][..], Command::Preview(Some(1234))),
+            (&["--version"][..], Command::Version),
+            (&["-V"][..], Command::Version),
         ] {
             let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
             assert_eq!(parse_args(&args), want, "{args:?}");

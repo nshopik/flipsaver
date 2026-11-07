@@ -150,8 +150,8 @@ pub struct CellState {
     pub anim: Option<Anim<char>>,
 }
 
-/// Per-window render mode, decided once at creation.
-pub enum Mode {
+/// Per-window face (clock or board), decided once at creation.
+pub enum Face {
     Clock {
         cache: Option<crate::clock::draw::FaceCache>,
         /// (61,61) is the not-yet-primed sentinel.
@@ -173,7 +173,7 @@ pub struct WindowState {
     pub gfx: std::rc::Rc<Gfx>,
     pub target: Option<ID2D1HwndRenderTarget>,
     pub device: String,
-    pub mode: Mode,
+    pub face: Face,
 }
 
 /// Current row-major glyph grid for a board, from its resolved zones. One
@@ -193,31 +193,30 @@ fn board_cells(zones: &[crate::tz::Zone], grid: &crate::board::Grid, is_24h: boo
     cells
 }
 
-/// Choose the render mode for a window. World mode needs at least one
+/// Choose the face for a window. World mode needs at least one
 /// resolvable zone; otherwise (empty list or all invalid) fall back to the
 /// clock, decided once here.
-fn make_mode(settings: &Settings, device: &str) -> Mode {
-    use crate::settings::Mode as SettingsMode;
-    if settings.screen_mode(device) == SettingsMode::World {
+fn make_face(settings: &Settings, device: &str) -> Face {
+    if settings.screen_mode(device) == crate::settings::Mode::World {
         let zones = crate::tz::resolve_all(&settings.world_clocks);
         if zones.iter().any(|z| z.info.is_some()) {
-            return Mode::Board { zones, cache: None, cells: Vec::new() };
+            return Face::Board { zones, cache: None, cells: Vec::new() };
         }
         debug_log("flipsaver: no resolvable zones, falling back to clock");
     }
-    Mode::Clock { cache: None, shown: (61, 61), hours_anim: None, minutes_anim: None }
+    Face::Clock { cache: None, shown: (61, 61), hours_anim: None, minutes_anim: None }
 }
 
 /// Drop device-dependent caches and abandon any in-flight animation, keeping
-/// the mode and (for a board) its resolved zones.
+/// the face and (for a board) its resolved zones.
 fn reset_caches(state: &mut WindowState) {
-    match &mut state.mode {
-        Mode::Clock { cache, hours_anim, minutes_anim, .. } => {
+    match &mut state.face {
+        Face::Clock { cache, hours_anim, minutes_anim, .. } => {
             *cache = None;
             *hours_anim = None;
             *minutes_anim = None;
         }
-        Mode::Board { cache, cells, .. } => {
+        Face::Board { cache, cells, .. } => {
             *cache = None;
             cells.clear();
         }
@@ -388,8 +387,8 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 rt.Clear(Some(&crate::clock::draw::color(0x000000)));
                 let now = GetTickCount64();
                 let is_24h = state.settings.display_24hr;
-                match &mut state.mode {
-                    Mode::Clock { cache, shown, hours_anim, minutes_anim } => {
+                match &mut state.face {
+                    Face::Clock { cache, shown, hours_anim, minutes_anim } => {
                         if cache.is_none() {
                             let vertical = state.settings.effective_orientation(&state.device, w, h);
                             *cache = crate::clock::draw::FaceCache::new(
@@ -407,7 +406,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             );
                         }
                     }
-                    Mode::Board { zones, cache, cells } => {
+                    Face::Board { zones, cache, cells } => {
                         if cache.is_none() {
                             let grid = crate::board::compute_grid(
                                 w, h, state.settings.board_scale, zones.len(), is_24h,
@@ -454,8 +453,8 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             let now = GetTickCount64();
             match wp.0 {
                 1 => {
-                    match &mut state.mode {
-                        Mode::Clock { shown, hours_anim, minutes_anim, .. } => {
+                    match &mut state.face {
+                        Face::Clock { shown, hours_anim, minutes_anim, .. } => {
                             let st = GetLocalTime();
                             let (h, m) = (st.wHour as u32, st.wMinute as u32);
                             let primed = *shown != (61, 61);
@@ -476,7 +475,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                                 let _ = InvalidateRect(Some(hwnd), None, false);
                             }
                         }
-                        Mode::Board { zones, cache, cells } => {
+                        Face::Board { zones, cache, cells } => {
                             if let Some(bc) = cache {
                                 let is_24h = state.settings.display_24hr;
                                 let next = board_cells(zones, &bc.grid, is_24h);
@@ -508,8 +507,8 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 2 => {
                     // Fast tick: advance the fold; retire finished anims.
                     let mut any_active = false;
-                    match &mut state.mode {
-                        Mode::Clock { hours_anim, minutes_anim, .. } => {
+                    match &mut state.face {
+                        Face::Clock { hours_anim, minutes_anim, .. } => {
                             let done = |a: &Option<Anim<u32>>| a.as_ref().map_or(true, |x| x.progress(now) >= 1.0);
                             if done(hours_anim) {
                                 *hours_anim = None;
@@ -519,7 +518,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             }
                             any_active = hours_anim.is_some() || minutes_anim.is_some();
                         }
-                        Mode::Board { cells, .. } => {
+                        Face::Board { cells, .. } => {
                             for c in cells.iter_mut() {
                                 if let Some(a) = &c.anim {
                                     if a.progress(now) >= 1.0 {
@@ -573,7 +572,7 @@ pub fn run_fullscreen(settings: Settings) {
                     settings: settings.clone(),
                     gfx: gfx.clone(),
                     target: None,
-                    mode: make_mode(&settings, &device),
+                    face: make_face(&settings, &device),
                     device,
                 },
             );
@@ -615,7 +614,7 @@ pub fn run_preview(settings: Settings, parent: isize) {
                 target: None,
                 device: String::new(),
                 settings,
-                mode: Mode::Clock { cache: None, shown: (61, 61), hours_anim: None, minutes_anim: None },
+                face: Face::Clock { cache: None, shown: (61, 61), hours_anim: None, minutes_anim: None },
             },
         );
         pump();
