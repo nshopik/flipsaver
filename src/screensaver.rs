@@ -653,3 +653,16 @@ pub fn run_preview(settings: Settings, parent: isize) {
         pump();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::wide_to_string;
+
+    #[test]
+    fn wide_to_string_stops_at_nul() {
+        let w: Vec<u16> = "DISPLAY1\0junk".encode_utf16().collect();
+        assert_eq!(wide_to_string(&w), "DISPLAY1");
+        let w: Vec<u16> = "no-nul".encode_utf16().collect();
+        assert_eq!(wide_to_string(&w), "no-nul");
+    }
+}
