@@ -34,7 +34,13 @@ fn find_llvm_rc() -> io::Result<String> {
 
 fn embed_manifest_via_coff(out_dir: &PathBuf) -> io::Result<()> {
     // Floor is Windows 10 1703+ (spec requirement).
-    let version = env!("CARGO_PKG_VERSION");
+    // Manifest versions are four numbers; a SemVer pre-release suffix
+    // would make the binary fail to start with a side-by-side error.
+    let version = concat!(
+        env!("CARGO_PKG_VERSION_MAJOR"), ".",
+        env!("CARGO_PKG_VERSION_MINOR"), ".",
+        env!("CARGO_PKG_VERSION_PATCH"),
+    );
     let manifest_xml = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3" manifestVersion="1.0">
   <assemblyIdentity name="flipsaver" type="win32" version="{}.0"/>
@@ -106,6 +112,7 @@ fn main() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs");
     println!("cargo:rerun-if-changed=.git/packed-refs");
+    println!("cargo:rerun-if-env-changed=LLVM_RC");
 
     // Embed the manifest via llvm-rc (works on any host, no mt.exe); main.rs's
     // SetProcessDpiAwarenessContext is the fallback.
