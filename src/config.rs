@@ -28,11 +28,12 @@ type DlgCtx = (Settings, Vec<(RECT, String)>);
 
 struct DlgBuilder {
     words: Vec<u16>,
+    items: u16,
 }
 
 impl DlgBuilder {
-    fn new(title: &str, cx: i16, cy: i16, item_count: u16) -> DlgBuilder {
-        let mut b = DlgBuilder { words: Vec::new() };
+    fn new(title: &str, cx: i16, cy: i16) -> DlgBuilder {
+        let mut b = DlgBuilder { words: Vec::new(), items: 0 };
         let style: u32 = (DS_SETFONT as u32)
             | (DS_MODALFRAME as u32)
             | WS_POPUP.0
@@ -40,7 +41,7 @@ impl DlgBuilder {
             | WS_SYSMENU.0;
         b.dword(style);
         b.dword(0); // dwExtendedStyle
-        b.word(item_count);
+        b.word(0); // cdit, patched by finish()
         b.word(0); // x
         b.word(0); // y
         b.word(cx as u16);
@@ -51,6 +52,11 @@ impl DlgBuilder {
         b.word(8); // font point size (DS_SETFONT)
         b.wstr("MS Shell Dlg");
         b
+    }
+
+    fn finish(mut self) -> Vec<u16> {
+        self.words[4] = self.items; // DLGTEMPLATE.cdit
+        self.words
     }
 
     fn word(&mut self, w: u16) {
@@ -89,6 +95,7 @@ impl DlgBuilder {
     }
 
     fn item_header(&mut self, style: u32, x: i16, y: i16, cx: i16, cy: i16, id: u16) {
+        self.items += 1;
         self.align_dword();
         self.dword(style | WS_CHILD.0 | WS_VISIBLE.0);
         self.dword(0); // exstyle
@@ -103,9 +110,8 @@ impl DlgBuilder {
 fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
     let row_h: i16 = 14;
     let rows = monitors.len();
-    let item_count = (12 + rows * 5) as u16;
     let cy = 125 + rows as i16 * row_h;
-    let mut b = DlgBuilder::new("FlipSaver Settings", 300, cy, item_count);
+    let mut b = DlgBuilder::new("FlipSaver Settings", 300, cy);
     b.item_atom(0, 7, 9, 45, 8, 0, 0x0082, "Time format:"); // STATIC
     b.item_atom(
         BS_AUTORADIOBUTTON as u32 | WS_TABSTOP.0 | WS_GROUP.0,
@@ -154,7 +160,7 @@ fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
         97, by, 50, 14, IDOK.0 as u16, 0x0080, "OK",
     );
     b.item_atom(BS_PUSHBUTTON as u32 | WS_TABSTOP.0, 153, by, 50, 14, IDCANCEL.0 as u16, 0x0080, "Cancel");
-    b.words
+    b.finish()
 }
 
 unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> isize {
