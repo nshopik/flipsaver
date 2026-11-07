@@ -125,6 +125,11 @@ pub fn font_display_name() -> &'static str {
     }
 }
 
+/// `r.ok()`, logging the error.
+fn logged<T>(what: &str, r: Result<T>) -> Option<T> {
+    r.map_err(|e| debug_log(&format!("flipsaver: {what} failed: {e:?}"))).ok()
+}
+
 pub fn debug_log(line: &str) {
     let wide: Vec<u16> = line.encode_utf16().chain([0]).collect();
     unsafe {
@@ -251,7 +256,7 @@ unsafe fn ensure_target(hwnd: HWND, state: &mut WindowState) -> Option<ID2D1Hwnd
             },
             presentOptions: D2D1_PRESENT_OPTIONS_NONE,
         };
-        state.target = state.gfx.d2d.CreateHwndRenderTarget(&props, &hwnd_props).ok();
+        state.target = logged("render target", state.gfx.d2d.CreateHwndRenderTarget(&props, &hwnd_props));
     }
     state.target.clone()
 }
@@ -399,19 +404,18 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                     Face::Clock { cache, shown, hours_anim, minutes_anim } => {
                         if cache.is_none() {
                             let vertical = state.settings.effective_orientation(&state.device, w, h);
-                            *cache = crate::clock::draw::FaceCache::new(
+                            *cache = logged("clock face", crate::clock::draw::FaceCache::new(
                                 &rt, &state.gfx, w, h, &state.settings, vertical, state.is_preview,
-                            )
-                            .ok();
+                            ));
                         }
                         if let Some(face) = cache {
                             if *shown == (61, 61) {
                                 let st = GetLocalTime();
                                 *shown = (st.wHour as u32, st.wMinute as u32);
                             }
-                            let _ = crate::clock::draw::draw_face(
+                            logged("draw clock", crate::clock::draw::draw_face(
                                 &rt, face, *shown, hours_anim.as_ref(), minutes_anim.as_ref(), now,
-                            );
+                            ));
                         }
                     }
                     Face::Board { zones, cache, cells } => {
@@ -419,7 +423,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             let grid = crate::board::compute_grid(
                                 w, h, state.settings.board_scale, zones.len(), is_24h,
                             );
-                            *cache = crate::board::draw::BoardCache::new(&rt, &state.gfx, grid).ok();
+                            *cache = logged("board", crate::board::draw::BoardCache::new(&rt, &state.gfx, grid));
                             if let Some(bc) = cache {
                                 let glyphs = board_cells(zones, &bc.grid, is_24h);
                                 *cells = glyphs
@@ -429,7 +433,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             }
                         }
                         if let Some(bc) = cache {
-                            let _ = crate::board::draw::draw_board(&rt, bc, cells, now);
+                            logged("draw board", crate::board::draw::draw_board(&rt, bc, cells, now));
                         }
                     }
                 }
@@ -441,6 +445,8 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                         reset_caches(state);
                         let _ = KillTimer(Some(hwnd), 2);
                         let _ = InvalidateRect(Some(hwnd), None, false);
+                    } else {
+                        debug_log(&format!("flipsaver: EndDraw failed: {e:?}"));
                     }
                 }
             }
@@ -474,7 +480,11 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             match wp.0 {
                 1 => {
                     match &mut state.face {
-                        Face::Clock { shown, hours_anim, minutes_anim, .. } => {
+                        Face::Clock { cache, shown, hours_anim, minutes_anim } => {
+                            // A failed face build retries on the next paint.
+                            if cache.is_none() {
+                                let _ = InvalidateRect(Some(hwnd), None, false);
+                            }
                             let st = GetLocalTime();
                             let (h, m) = (st.wHour as u32, st.wMinute as u32);
                             let primed = *shown != (61, 61);
@@ -519,6 +529,8 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                                     }
                                     let _ = InvalidateRect(Some(hwnd), None, false);
                                 }
+                            } else {
+                                let _ = InvalidateRect(Some(hwnd), None, false);
                             }
                         }
                     }
@@ -576,9 +588,9 @@ unsafe fn pump() {
 }
 
 pub fn run_fullscreen(settings: Settings) {
-    let gfx = match Gfx::new() {
-        Ok(g) => std::rc::Rc::new(g),
-        Err(_) => return, // no D2D at all: nothing sane to render, exit quietly
+    // No D2D at all: nothing sane to render.
+    let Some(gfx) = logged("graphics init", Gfx::new()).map(std::rc::Rc::new) else {
+        return;
     };
     unsafe {
         let instance: HINSTANCE = GetModuleHandleW(None).unwrap_or_default().into();
@@ -618,9 +630,8 @@ pub fn run_preview(settings: Settings, parent: isize) {
         }
         let instance: HINSTANCE = GetModuleHandleW(None).unwrap_or_default().into();
         register_class(instance);
-        let gfx = match Gfx::new() {
-            Ok(g) => std::rc::Rc::new(g),
-            Err(_) => return,
+        let Some(gfx) = logged("graphics init", Gfx::new()).map(std::rc::Rc::new) else {
+            return;
         };
         // Same draw path as /s, including the 1 s timer, so the preview
         // minute stays live. Input-exit is disabled via is_preview; the

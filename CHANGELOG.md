@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Display change while running**: the saver exits on a resolution or
   monitor-layout change instead of drawing stretched or missing a new
   monitor; a resized window rebuilds its render target.
+- **Black monitor after a failed board build** retries every second;
+  render failures are logged via OutputDebugString.
 - **UTF-8 BOM** at the start of `Settings.ini` no longer hides the
   first section.
 
