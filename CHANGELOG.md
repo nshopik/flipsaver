@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Per-monitor settings survive `DISPLAYn` renumbering**: `[Screen …]`
+  sections are keyed by the monitor's device interface path instead of
+  the `DISPLAYn` name Windows can reassign. The path includes the GPU
+  port, so moving a cable to another port may reset that monitor to
+  defaults. An existing `[Screen DISPLAYn]` section still applies, and
+  the next dialog OK rewrites it under the new key.
 - **Default world-clock cities**: now eight (Los Angeles, New York,
   London, Frankfurt, Moscow, Mumbai, Singapore, Tokyo); replaces the
   previous six. Existing `[WorldClocks]` sections are unaffected.

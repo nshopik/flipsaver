@@ -159,7 +159,7 @@ pub struct WindowState {
     pub settings: Settings,
     pub gfx: std::rc::Rc<Gfx>,
     pub target: Option<ID2D1HwndRenderTarget>,
-    pub device: String,
+    pub screen: crate::settings::ScreenSettings,
     pub face: Face,
 }
 
@@ -183,8 +183,8 @@ fn board_cells(zones: &[crate::tz::Zone], grid: &crate::board::Grid, is_24h: boo
 /// Choose the face for a window. World mode needs at least one
 /// resolvable zone; otherwise (empty list or all invalid) fall back to the
 /// clock, decided once here.
-fn make_face(settings: &Settings, device: &str) -> Face {
-    if settings.screen_mode(device) == crate::settings::Mode::World {
+fn make_face(settings: &Settings, screen: crate::settings::ScreenSettings) -> Face {
+    if screen.mode == crate::settings::Mode::World {
         let zones = crate::tz::resolve_all(&settings.world_clocks);
         if zones.iter().any(|z| z.info.is_some()) {
             return Face::Board { zones, cache: None, cells: Vec::new() };
@@ -240,28 +240,61 @@ unsafe fn ensure_target(hwnd: HWND, state: &mut WindowState) -> Option<ID2D1Hwnd
     state.target.clone()
 }
 
-pub fn enumerate_monitors() -> Vec<(RECT, String)> {
+/// One attached monitor.
+pub struct Monitor {
+    pub rect: RECT,
+    /// Monitor device interface path, stable across `DISPLAYn` renumbering.
+    /// Falls back to `legacy` when Windows reports none.
+    pub id: String,
+    /// GDI device name (`DISPLAY1`), the settings key before `id`.
+    pub legacy: String,
+}
+
+pub fn wide_to_string(w: &[u16]) -> String {
+    let end = w.iter().position(|&c| c == 0).unwrap_or(w.len());
+    String::from_utf16_lossy(&w[..end])
+}
+
+/// Device interface path of the active monitor on GDI device `gdi_name`
+/// (NUL-terminated `\\.\DISPLAYn`).
+unsafe fn monitor_device_path(gdi_name: &[u16]) -> Option<String> {
+    for i in 0.. {
+        let mut dd = DISPLAY_DEVICEW { cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
+        if !EnumDisplayDevicesW(PCWSTR(gdi_name.as_ptr()), i, &mut dd, EDD_GET_DEVICE_INTERFACE_NAME).as_bool() {
+            return None;
+        }
+        if (dd.StateFlags & DISPLAY_DEVICE_ACTIVE).0 != 0 {
+            return Some(wide_to_string(&dd.DeviceID)).filter(|id| !id.is_empty());
+        }
+    }
+    None
+}
+
+pub fn enumerate_monitors() -> Vec<Monitor> {
     unsafe extern "system" fn enum_proc(
         mon: HMONITOR,
         _hdc: HDC,
         rect: *mut RECT,
         lparam: LPARAM,
     ) -> BOOL {
-        let v = &mut *(lparam.0 as *mut Vec<(RECT, String)>);
+        let v = &mut *(lparam.0 as *mut Vec<Monitor>);
         let mut info = MONITORINFOEXW::default();
         // szDevice is only populated when cbSize covers the Ex struct.
         info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
         if GetMonitorInfoW(mon, &mut info.monitorInfo as *mut MONITORINFO).as_bool() {
-            let name = String::from_utf16_lossy(&info.szDevice);
-            let name = name.trim_end_matches('\0').trim_start_matches(r"\\.\").to_string();
-            v.push((info.monitorInfo.rcMonitor, name));
+            let legacy = wide_to_string(&info.szDevice).trim_start_matches(r"\\.\").to_string();
+            v.push(Monitor {
+                rect: info.monitorInfo.rcMonitor,
+                id: monitor_device_path(&info.szDevice).unwrap_or_else(|| legacy.clone()),
+                legacy,
+            });
         } else {
-            // Failure → empty device name → Auto resolution downstream.
-            v.push((*rect, String::new()));
+            // Failure → empty names → default settings downstream.
+            v.push(Monitor { rect: *rect, id: String::new(), legacy: String::new() });
         }
         TRUE
     }
-    let mut v: Vec<(RECT, String)> = Vec::new();
+    let mut v: Vec<Monitor> = Vec::new();
     unsafe {
         let _ = EnumDisplayMonitors(None, None, Some(enum_proc), LPARAM(&mut v as *mut _ as isize));
     }
@@ -382,7 +415,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 match &mut state.face {
                     Face::Clock { cache, shown, hours_anim, minutes_anim } => {
                         if cache.is_none() {
-                            let vertical = state.settings.effective_orientation(&state.device, w, h);
+                            let vertical = state.screen.vertical(w, h);
                             *cache = logged("clock face", crate::clock::draw::FaceCache::new(
                                 &rt, &state.gfx, w, h, &state.settings, vertical, state.is_preview,
                             ));
@@ -549,21 +582,22 @@ pub fn run_fullscreen(settings: Settings) {
     unsafe {
         let instance: HINSTANCE = GetModuleHandleW(None).unwrap_or_default().into();
         register_class(instance);
-        for (bounds, device) in enumerate_monitors() {
+        for m in enumerate_monitors() {
+            let screen = settings.screen(&m.id, &m.legacy);
             create_saver_window(
                 instance,
                 WS_POPUP,
                 WS_EX_TOPMOST,
                 None,
-                bounds,
+                m.rect,
                 WindowState {
                     is_preview: false,
                     mouse: None,
                     settings: settings.clone(),
                     gfx: gfx.clone(),
                     target: None,
-                    face: make_face(&settings, &device),
-                    device,
+                    face: make_face(&settings, screen),
+                    screen,
                 },
             );
         }
@@ -601,7 +635,7 @@ pub fn run_preview(settings: Settings, parent: isize) {
                 mouse: None,
                 gfx,
                 target: None,
-                device: String::new(),
+                screen: Default::default(),
                 settings,
                 face: Face::Clock { cache: None, shown: None, hours_anim: None, minutes_anim: None },
             },

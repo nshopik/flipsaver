@@ -20,9 +20,11 @@ same machine.
 | 11 | Portrait monitor with no `[Screen]` section renders vertical by default; landscape unchanged | |
 | 12 | `/c`: one row per monitor; setting Vertical on a landscape monitor then `/s` renders vertical | |
 | 13 | Mixed multi-monitor: one Horizontal + one Vertical override both honored simultaneously | |
-| 14 | Orientation persists per monitor across restarts; `Settings.ini` gains `[Screen <name>]` only for non-Auto | |
+| 14 | Orientation persists per monitor across restarts; `Settings.ini` gains `[Screen <device path>]` (e.g. `[Screen \\?\DISPLAY#GSM5B7F#…]`) only for non-Auto | |
 | 15 | Undock a monitor, save from `/c`, redock: the undocked monitor's override survived | |
 | 16 | Old `Settings.ini` (no `[Screen]` sections) → all monitors Auto, landscape identical to v0.1 | |
+| 16a | Old `[Screen DISPLAYn]` section still applies; first dialog OK replaces it with `[Screen <device path>]` | |
+| 16b | Reboot, driver update or dock change until Windows renumbers `DISPLAYn`: each monitor keeps its own World/Vertical choice | |
 | 17 | Minute flip: minute box folds old→new over ~600ms (upper leaf down, then new lower falls) | |
 | 18 | Top of hour (e.g. 12:59→13:00): hour and minute boxes flip simultaneously | |
 | 19 | `/c`: uncheck "Flip animation", `/s` → value snaps instantly, no fold; re-check restores fold | |
