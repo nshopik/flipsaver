@@ -236,7 +236,13 @@ pub fn save(path: &Path, s: &Settings) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, s.to_ini_text())
+    // Temp file + rename: a crash mid-write never leaves a truncated INI.
+    let tmp = path.with_extension("ini.tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    std::io::Write::write_all(&mut f, s.to_ini_text().as_bytes())?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(&tmp, path)
 }
 
 pub fn default_path() -> PathBuf {
@@ -375,6 +381,10 @@ mod tests {
         };
         save(&path, &s).unwrap();
         assert_eq!(load(&path).unwrap(), s);
+        // Second save replaces the file and leaves no temp file behind.
+        save(&path, &Settings::default()).unwrap();
+        assert_eq!(load(&path).unwrap(), Settings::default());
+        assert!(!path.with_extension("ini.tmp").exists());
         std::fs::remove_dir_all(dir.parent().unwrap()).ok();
     }
 
