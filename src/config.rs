@@ -291,3 +291,25 @@ pub fn run_config(owner: Option<isize>) {
         // ctx dropped here, after the modal dialog returns.
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::build_template;
+    use crate::screensaver::Monitor;
+    use windows::Win32::Foundation::RECT;
+
+    #[test]
+    fn template_item_count_matches_controls() {
+        let mon = |id: &str| Monitor {
+            rect: RECT { left: 0, top: 0, right: 1920, bottom: 1080 },
+            id: id.into(),
+            legacy: id.into(),
+            primary: false,
+        };
+        // 12 fixed controls + 5 per monitor row; DLGTEMPLATE.cdit is word 4.
+        for monitors in [vec![], vec![mon("DISPLAY1"), mon("DISPLAY2")]] {
+            let words = build_template("Oswald", &monitors);
+            assert_eq!(words[4] as usize, 12 + 5 * monitors.len());
+        }
+    }
+}

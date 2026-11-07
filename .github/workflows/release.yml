@@ -43,9 +43,22 @@ jobs:
           name: flipsaver.scr
           path: flipsaver.scr
 
+  # Runs the cfg(windows) tests the Linux host cannot compile.
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Test
+        env:
+          LLVM_RC: C:\Program Files\LLVM\bin\llvm-rc.exe
+        run: cargo test
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, test-windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

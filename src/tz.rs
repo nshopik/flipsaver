@@ -71,3 +71,15 @@ pub fn zone_time(
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::resolve;
+
+    #[test]
+    fn resolves_installed_zones_case_insensitively() {
+        assert!(resolve("UTC").is_some());
+        assert!(resolve("pacific standard time").is_some());
+        assert!(resolve("Nowhere Standard Time").is_none());
+    }
+}
