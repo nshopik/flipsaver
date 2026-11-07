@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any window, or when its last window is closed from outside.
 - **Saver exits when another app takes the foreground**, so keystrokes
   never go to a hidden window.
+- **Display change while running**: the saver exits on a resolution or
+  monitor-layout change instead of drawing stretched or missing a new
+  monitor; a resized window rebuilds its render target.
 - **UTF-8 BOM** at the start of `Settings.ini` no longer hides the
   first section.
 
