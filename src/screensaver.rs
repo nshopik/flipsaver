@@ -369,6 +369,11 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             PostQuitMessage(0);
             LRESULT(0)
         }
+        // Another app took the foreground: keystrokes would reach it, not us.
+        WM_ACTIVATEAPP if !state.is_preview && wp.0 == 0 => {
+            PostQuitMessage(0);
+            LRESULT(0)
+        }
         WM_DESTROY => {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             drop(Box::from_raw(state_ptr));
