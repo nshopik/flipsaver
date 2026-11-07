@@ -31,6 +31,10 @@ Hanoi=SE Asia Standard Time
 Wellington=New Zealand Standard Time
 ```
 
+Labels longer than 16 characters are cut on the board but kept in the
+file. Pressing OK in the settings dialog rewrites `Settings.ini`:
+comment lines and keys or sections it does not know are dropped.
+
 Timezone names come from Windows (`tzutil /l` lists them); DST is
 handled automatically. The board has its own size slider in the
 settings dialog, independent of the clock size.

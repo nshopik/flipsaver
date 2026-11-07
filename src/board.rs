@@ -341,9 +341,16 @@ mod tests {
     #[test]
     fn label_truncates_and_uppercases() {
         let t = TimeParts { hour: 1, minute: 0, date_differs: false, weekday: 0 };
-        let row = format_row("an extremely long name", Some(t), true);
-        let label: String = row[..LABEL_CELLS].iter().collect();
-        assert_eq!(label, "AN EXTREMELY LON");
+        for (input, want) in [
+            ("an extremely long name", "AN EXTREMELY LON"),
+            // Truncation counts chars, not bytes.
+            ("Zürich Flughafen Kloten", "ZÜRICH FLUGHAFEN"),
+        ] {
+            let row = format_row(input, Some(t), true);
+            assert_eq!(row.len(), row_width(true));
+            let label: String = row[..LABEL_CELLS].iter().collect();
+            assert_eq!(label, want);
+        }
     }
 
     #[test]
