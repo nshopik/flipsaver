@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   London, Frankfurt, Moscow, Mumbai, Singapore, Tokyo); replaces the
   previous six. Existing `[WorldClocks]` sections are unaffected.
 
+### Fixed
+
+- **Settings dialog no longer overwrites an unreadable `Settings.ini`**:
+  a locked, unreadable or non-UTF-8 file shows an error instead of
+  opening the dialog with defaults. `/s` and `/p` decode such a file
+  leniently.
+- **UTF-8 BOM** at the start of `Settings.ini` no longer hides the
+  first section.
+
 ## [0.2.0] - 2026-07-07
 
 ### Added

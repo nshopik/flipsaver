@@ -76,10 +76,10 @@ fn main() {
         // No CoUninitialize: the process exits right after the loop.
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let settings = settings::load(&settings::default_path());
+    let settings = || settings::load_or_default(&settings::default_path());
     match parse_args(&args) {
-        Mode::Screensaver => screensaver::run_fullscreen(settings),
-        Mode::Preview(Some(parent)) => screensaver::run_preview(settings, parent),
+        Mode::Screensaver => screensaver::run_fullscreen(settings()),
+        Mode::Preview(Some(parent)) => screensaver::run_preview(settings(), parent),
         Mode::Preview(None) => {}          // declared deviation: exit 0 silently
         Mode::Config => config::run_config(),
         Mode::Version => print_version(),
