@@ -240,12 +240,15 @@ pub mod draw {
             leaf_scale,
             windows_numerics::Vector2 { X: 0.0, Y: hinge },
         ));
-        draw_content()?;
-        shade.SetOpacity(shade_alpha);
-        rt.FillRoundedRectangle(shade_rect, shade);
+        // Restore clip and transform even on error: both outlive BeginDraw.
+        let r = draw_content();
+        if r.is_ok() {
+            shade.SetOpacity(shade_alpha);
+            rt.FillRoundedRectangle(shade_rect, shade);
+        }
         rt.SetTransform(&Matrix3x2::identity());
         rt.PopAxisAlignedClip();
-        Ok(())
+        r
     }
 
     /// Full fold frame for one rect: static halves behind + the moving leaf,
