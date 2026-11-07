@@ -104,6 +104,8 @@ impl Settings {
         // The preloaded defaults are cleared the first time a [WorldClocks]
         // header appears, so a present-but-empty section = "no cities".
         let mut world_cleared = false;
+        // Notepad's "UTF-8" option before Win10 1903 writes a BOM.
+        let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() {
@@ -278,6 +280,7 @@ mod tests {
         let s = Settings::from_ini_text("[General]\r\nDisplay24Hr=1\r\nScale=40\r\n");
         assert!(s.display_24hr);
         assert_eq!(s.scale, 40);
+        assert!(Settings::from_ini_text("\u{FEFF}[General]\r\nDisplay24Hr=1\r\n").display_24hr);
     }
 
     #[test]
