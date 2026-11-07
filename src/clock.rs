@@ -132,6 +132,38 @@ pub fn box_text(is_hours: bool, value: u32, is_24h: bool) -> (String, Option<Mar
 
 /// Total flip duration.
 pub const FLIP_MS: f64 = 600.0;
+
+/// An in-flight flip: old value (clock hour/minute or board glyph) folding
+/// to the new one since start_ms.
+pub struct Anim<T> {
+    pub from: T,
+    pub to: T,
+    pub start_ms: u64,
+}
+
+impl<T> Anim<T> {
+    /// Fold progress at `now_ms`; >= 1.0 means finished.
+    pub fn progress(&self, now_ms: u64) -> f64 {
+        now_ms.saturating_sub(self.start_ms) as f64 / FLIP_MS
+    }
+}
+
+/// Drop a finished flip; true while it is still running.
+pub fn retire<T>(anim: &mut Option<Anim<T>>, now_ms: u64) -> bool {
+    if anim.as_ref().is_some_and(|a| a.progress(now_ms) >= 1.0) {
+        *anim = None;
+    }
+    anim.is_some()
+}
+
+/// Which boxes (hours, minutes) fold when the face moves from `shown` to
+/// `now`. A face not yet painted (`None`) or with animation off never folds.
+pub fn flips(shown: Option<(u32, u32)>, now: (u32, u32), animate: bool) -> (bool, bool) {
+    match shown {
+        Some((h, m)) if animate => (h != now.0, m != now.1),
+        _ => (false, false),
+    }
+}
 const MAX_SHADE: f32 = 0.55;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -470,7 +502,7 @@ pub mod draw {
             bl: &BoxLayout,
             is_hours: bool,
             settled: u32,
-            anim: Option<&crate::screensaver::Anim<u32>>,
+            anim: Option<&super::Anim<u32>>,
             now_ms: u64,
         ) -> Result<()> {
             match anim {
@@ -514,8 +546,8 @@ pub mod draw {
         rt: &ID2D1HwndRenderTarget,
         cache: &FaceCache,
         shown: (u32, u32),
-        hours_anim: Option<&crate::screensaver::Anim<u32>>,
-        minutes_anim: Option<&crate::screensaver::Anim<u32>>,
+        hours_anim: Option<&super::Anim<u32>>,
+        minutes_anim: Option<&super::Anim<u32>>,
         now_ms: u64,
     ) -> Result<()> {
         unsafe {
@@ -638,6 +670,29 @@ mod tests {
         let down = flip_frame(0.75);
         assert_eq!(down.phase, Phase::LowerFall);
         assert!((down.leaf_scale - 0.98079).abs() < 1e-3);
+    }
+
+    #[test]
+    fn flips_table() {
+        for (shown, now, animate, want) in [
+            (None, (9, 0), true, (false, false)),           // first paint primes, no fold
+            (Some((9, 0)), (9, 0), true, (false, false)),   // no change
+            (Some((9, 0)), (9, 1), true, (false, true)),    // minute
+            (Some((9, 59)), (10, 0), true, (true, true)),   // top of hour
+            (Some((9, 59)), (10, 0), false, (false, false)), // animation off
+        ] {
+            assert_eq!(flips(shown, now, animate), want, "{shown:?} -> {now:?}");
+        }
+    }
+
+    #[test]
+    fn retire_drops_only_finished() {
+        let mut a = Some(Anim { from: 1u32, to: 2, start_ms: 1000 });
+        assert!(retire(&mut a, 1000 + FLIP_MS as u64 - 1));
+        assert!(a.is_some());
+        assert!(!retire(&mut a, 1000 + FLIP_MS as u64));
+        assert!(a.is_none());
+        assert!(!retire::<u32>(&mut None, 0));
     }
 
     #[test]

@@ -137,40 +137,19 @@ pub fn debug_log(line: &str) {
     }
 }
 
-/// An in-flight flip: old value (clock hour/minute or board glyph) folding
-/// to the new one since start_ms.
-pub struct Anim<T> {
-    pub from: T,
-    pub to: T,
-    pub start_ms: u64,
-}
-
-impl<T> Anim<T> {
-    /// Fold progress at `now_ms`; >= 1.0 means finished.
-    pub fn progress(&self, now_ms: u64) -> f64 {
-        now_ms.saturating_sub(self.start_ms) as f64 / crate::clock::FLIP_MS
-    }
-}
-
-/// A board cell's rendered glyph, with room for an in-flight flip.
-pub struct CellState {
-    pub glyph: char,
-    pub anim: Option<Anim<char>>,
-}
-
 /// Per-window face (clock or board), decided once at creation.
 pub enum Face {
     Clock {
         cache: Option<crate::clock::draw::FaceCache>,
-        /// (61,61) is the not-yet-primed sentinel.
-        shown: (u32, u32),
-        hours_anim: Option<Anim<u32>>,
-        minutes_anim: Option<Anim<u32>>,
+        /// None until the first paint reads the time.
+        shown: Option<(u32, u32)>,
+        hours_anim: Option<crate::clock::Anim<u32>>,
+        minutes_anim: Option<crate::clock::Anim<u32>>,
     },
     Board {
         zones: Vec<crate::tz::Zone>,
         cache: Option<crate::board::draw::BoardCache>,
-        cells: Vec<CellState>,
+        cells: Vec<crate::board::CellState>,
     },
 }
 
@@ -212,7 +191,7 @@ fn make_face(settings: &Settings, device: &str) -> Face {
         }
         debug_log("flipsaver: no resolvable zones, falling back to clock");
     }
-    Face::Clock { cache: None, shown: (61, 61), hours_anim: None, minutes_anim: None }
+    Face::Clock { cache: None, shown: None, hours_anim: None, minutes_anim: None }
 }
 
 /// Drop device-dependent caches and abandon any in-flight animation, keeping
@@ -409,12 +388,12 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             ));
                         }
                         if let Some(face) = cache {
-                            if *shown == (61, 61) {
+                            let shown = *shown.get_or_insert_with(|| {
                                 let st = GetLocalTime();
-                                *shown = (st.wHour as u32, st.wMinute as u32);
-                            }
+                                (st.wHour as u32, st.wMinute as u32)
+                            });
                             logged("draw clock", crate::clock::draw::draw_face(
-                                &rt, face, *shown, hours_anim.as_ref(), minutes_anim.as_ref(), now,
+                                &rt, face, shown, hours_anim.as_ref(), minutes_anim.as_ref(), now,
                             ));
                         }
                     }
@@ -428,7 +407,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                                 let glyphs = board_cells(zones, &bc.grid, is_24h);
                                 *cells = glyphs
                                     .into_iter()
-                                    .map(|g| CellState { glyph: g, anim: None })
+                                    .map(|glyph| crate::board::CellState { glyph, anim: None })
                                     .collect();
                             }
                         }
@@ -487,19 +466,18 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             }
                             let st = GetLocalTime();
                             let (h, m) = (st.wHour as u32, st.wMinute as u32);
-                            let primed = *shown != (61, 61);
-                            let mut started = false;
-                            if primed && h != shown.0 && state.settings.flip_animation {
-                                *hours_anim = Some(Anim { from: shown.0, to: h, start_ms: now });
-                                started = true;
+                            let (fold_h, fold_m) = crate::clock::flips(*shown, (h, m), state.settings.flip_animation);
+                            if let Some((from_h, from_m)) = *shown {
+                                if fold_h {
+                                    *hours_anim = Some(crate::clock::Anim { from: from_h, to: h, start_ms: now });
+                                }
+                                if fold_m {
+                                    *minutes_anim = Some(crate::clock::Anim { from: from_m, to: m, start_ms: now });
+                                }
                             }
-                            if primed && m != shown.1 && state.settings.flip_animation {
-                                *minutes_anim = Some(Anim { from: shown.1, to: m, start_ms: now });
-                                started = true;
-                            }
-                            if (h, m) != *shown {
-                                *shown = (h, m);
-                                if started {
+                            if *shown != Some((h, m)) {
+                                *shown = Some((h, m));
+                                if fold_h || fold_m {
                                     SetTimer(Some(hwnd), 2, 16, None);
                                 }
                                 let _ = InvalidateRect(Some(hwnd), None, false);
@@ -509,23 +487,10 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             if let Some(bc) = cache {
                                 let is_24h = state.settings.display_24hr;
                                 let next = board_cells(zones, &bc.grid, is_24h);
-                                let old: Vec<char> = cells.iter().map(|c| c.glyph).collect();
-                                let changed = crate::board::diff_cells(&old, &next);
-                                if !changed.is_empty() {
-                                    if state.settings.flip_animation {
-                                        for &i in &changed {
-                                            cells[i].anim = Some(Anim {
-                                                from: cells[i].glyph,
-                                                to: next[i],
-                                                start_ms: now,
-                                            });
-                                        }
+                                let animate = state.settings.flip_animation;
+                                if crate::board::advance(cells, &next, now, animate) {
+                                    if animate {
                                         SetTimer(Some(hwnd), 2, 16, None);
-                                    }
-                                    // Settle the logical glyph regardless; a
-                                    // disabled flip just snaps on next paint.
-                                    for &i in &changed {
-                                        cells[i].glyph = next[i];
                                     }
                                     let _ = InvalidateRect(Some(hwnd), None, false);
                                 }
@@ -541,24 +506,13 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                     let mut any_active = false;
                     match &mut state.face {
                         Face::Clock { hours_anim, minutes_anim, .. } => {
-                            let done = |a: &Option<Anim<u32>>| a.as_ref().map_or(true, |x| x.progress(now) >= 1.0);
-                            if done(hours_anim) {
-                                *hours_anim = None;
-                            }
-                            if done(minutes_anim) {
-                                *minutes_anim = None;
-                            }
-                            any_active = hours_anim.is_some() || minutes_anim.is_some();
+                            let h = crate::clock::retire(hours_anim, now);
+                            let m = crate::clock::retire(minutes_anim, now);
+                            any_active = h || m;
                         }
                         Face::Board { cells, .. } => {
                             for c in cells.iter_mut() {
-                                if let Some(a) = &c.anim {
-                                    if a.progress(now) >= 1.0 {
-                                        c.anim = None;
-                                    } else {
-                                        any_active = true;
-                                    }
-                                }
+                                any_active |= crate::clock::retire(&mut c.anim, now);
                             }
                         }
                     }
@@ -649,7 +603,7 @@ pub fn run_preview(settings: Settings, parent: isize) {
                 target: None,
                 device: String::new(),
                 settings,
-                face: Face::Clock { cache: None, shown: (61, 61), hours_anim: None, minutes_anim: None },
+                face: Face::Clock { cache: None, shown: None, hours_anim: None, minutes_anim: None },
             },
         );
         pump();
