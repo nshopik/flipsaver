@@ -4,7 +4,7 @@ Cross-compiled for Windows from WSL2. No Windows toolchain required.
 
 ## One-time setup
 
-    cargo install cargo-xwin --locked
+    cargo install cargo-xwin --version 0.23.0 --locked
     sudo apt-get install -y clang lld llvm-19
 
 Pinned versions (splat layout drifts across xwin releases — if a build
