@@ -126,9 +126,9 @@ impl Settings {
                     "Display24Hr" => {
                         s.display_24hr = value.trim().parse::<i32>().map(|v| v == 1).unwrap_or(false)
                     }
-                    "Scale" => s.scale = value.trim().parse().unwrap_or(DEFAULT_SCALE),
+                    "Scale" => s.scale = value.trim().parse().unwrap_or(DEFAULT_SCALE).clamp(0, 100),
                     "BoardScale" => {
-                        s.board_scale = value.trim().parse().unwrap_or(DEFAULT_BOARD_SCALE)
+                        s.board_scale = value.trim().parse().unwrap_or(DEFAULT_BOARD_SCALE).clamp(0, 100)
                     }
                     // Default on; only an explicit 0 disables. Unparseable
                     // (and absent) stays on so pre-existing INIs animate.
@@ -257,6 +257,18 @@ mod tests {
         assert_eq!(Settings::from_ini_text("[General]\nScale=70\n").board_scale, 100);
         // garbage -> 100
         assert_eq!(Settings::from_ini_text("[General]\nBoardScale=abc\n").board_scale, 100);
+    }
+
+    #[test]
+    fn scales_clamp_to_slider_range() {
+        for (text, scale, board_scale) in [
+            ("[General]\nScale=150\nBoardScale=500\n", 100, 100),
+            ("[General]\nScale=-10\nBoardScale=-300\n", 0, 0),
+            ("[General]\nScale=40\nBoardScale=60\n", 40, 60),
+        ] {
+            let s = Settings::from_ini_text(text);
+            assert_eq!((s.scale, s.board_scale), (scale, board_scale), "{text}");
+        }
     }
 
     #[test]
