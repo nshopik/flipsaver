@@ -209,9 +209,9 @@ pub mod draw {
             rt.FillRoundedRectangle(&rounded, &self.cell_bg);
             rt.DrawRoundedRectangle(&rounded, &self.outline, 1.0, None);
             if glyph != ' ' {
-                let wide: Vec<u16> = [glyph].iter().map(|c| *c as u16).collect();
+                let mut buf = [0u16; 2];
                 let tl = self.dwrite.CreateTextLayout(
-                    &wide,
+                    glyph.encode_utf16(&mut buf),
                     &self.cell_format,
                     self.grid.cell as f32,
                     self.grid.cell as f32,
