@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the board still shows the first 16.
 - **Out-of-range `Scale` / `BoardScale`** in a hand-edited
   `Settings.ini` is clamped to 0..100 instead of blanking the screen.
+- **Non-ASCII command-line argument** (e.g. `/é`) opens the settings
+  dialog instead of crashing.
 - **UTF-8 BOM** at the start of `Settings.ini` no longer hides the
   first section.
 
