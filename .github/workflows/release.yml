@@ -54,6 +54,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check tag matches Cargo.toml
+        run: |
+          ver=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "${GITHUB_REF_NAME#v}" = "$ver" \
+            || { echo "Tag $GITHUB_REF_NAME does not match Cargo.toml version $ver" >&2; exit 1; }
+
       - uses: actions/download-artifact@v4
         with:
           name: flipsaver.scr
