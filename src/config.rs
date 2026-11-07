@@ -1,5 +1,6 @@
 //! /c mode: minimal settings dialog from an in-code DLGTEMPLATE.
 
+use crate::screensaver::Monitor;
 use crate::settings::{self, Mode, Orientation, ScreenSettings, Settings};
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -22,9 +23,9 @@ const TBM_GETPOS: u32 = 1024;
 const DWLP_USER: WINDOW_LONG_PTR_INDEX =
     WINDOW_LONG_PTR_INDEX(2 * std::mem::size_of::<isize>() as i32);
 
-// (mutable settings, monitors as (rect, device name)) — lives for the
-// dialog's lifetime, pointer stashed in DWLP_USER.
-type DlgCtx = (Settings, Vec<(RECT, String)>);
+// (mutable settings, monitors) — lives for the dialog's lifetime,
+// pointer stashed in DWLP_USER.
+type DlgCtx = (Settings, Vec<Monitor>);
 
 struct DlgBuilder {
     words: Vec<u16>,
@@ -107,7 +108,7 @@ impl DlgBuilder {
     }
 }
 
-fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
+fn build_template(font_name: &str, monitors: &[Monitor]) -> Vec<u16> {
     let row_h: i16 = 14;
     let rows = monitors.len();
     let cy = 125 + rows as i16 * row_h;
@@ -138,7 +139,7 @@ fn build_template(font_name: &str, monitors: &[(RECT, String)]) -> Vec<u16> {
     // One row per monitor: label + Auto/Horizontal/Vertical/World radios.
     // Each row's first radio carries WS_GROUP so the rows are independent
     // radio groups; the OK button's WS_GROUP closes the last row.
-    for (row, (rect, _device)) in monitors.iter().enumerate() {
+    for (row, Monitor { rect, .. }) in monitors.iter().enumerate() {
         let y = 97 + row as i16 * row_h;
         let base = 200 + row as u16 * 4;
         let w = rect.right - rect.left;
@@ -184,9 +185,9 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 IDC_FLIP,
                 if settings.flip_animation { BST_CHECKED } else { BST_UNCHECKED },
             );
-            for (row, (_rect, device)) in monitors.iter().enumerate() {
+            for (row, m) in monitors.iter().enumerate() {
                 let base = 200 + row as i32 * 4;
-                let sc = settings.screens.get(device).copied().unwrap_or_default();
+                let sc = settings.screen(&m.id, &m.legacy);
                 let checked = base
                     + match sc.mode {
                         Mode::World => 3,
@@ -211,11 +212,11 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 ctx.0.flip_animation = IsDlgButtonChecked(hwnd, IDC_FLIP) == 1;
                 // Only present monitors are touched; absent sections in the
                 // map are left as-is and preserved on save.
-                for (row, (_rect, device)) in ctx.1.iter().enumerate() {
+                for (row, m) in ctx.1.iter().enumerate() {
                     let base = 200 + row as i32 * 4;
                     // Keep the stored orientation while World is active, so
                     // switching back to a clock restores the last choice.
-                    let prev = ctx.0.screens.get(device).copied().unwrap_or_default();
+                    let prev = ctx.0.screen(&m.id, &m.legacy);
                     let sc = if IsDlgButtonChecked(hwnd, base + 3) == 1 {
                         ScreenSettings { orientation: prev.orientation, mode: Mode::World }
                     } else {
@@ -228,7 +229,7 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         };
                         ScreenSettings { orientation, mode: Mode::Clock }
                     };
-                    ctx.0.screens.insert(device.clone(), sc);
+                    ctx.0.set_screen(&m.id, &m.legacy, sc);
                 }
                 let path = settings::default_path();
                 match settings::save(&path, &ctx.0) {

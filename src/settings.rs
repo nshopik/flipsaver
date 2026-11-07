@@ -52,6 +52,18 @@ impl Default for ScreenSettings {
     }
 }
 
+impl ScreenSettings {
+    /// Single orientation resolution point: explicit setting wins, Auto
+    /// falls back to aspect (portrait → vertical). `true` is vertical.
+    pub fn vertical(&self, width: i32, height: i32) -> bool {
+        match self.orientation {
+            Orientation::Horizontal => false,
+            Orientation::Vertical => true,
+            Orientation::Auto => height > width,
+        }
+    }
+}
+
 fn default_world_clocks() -> Vec<(String, String)> {
     [
         ("Los Angeles", "Pacific Standard Time"),
@@ -191,25 +203,21 @@ impl Settings {
         out
     }
 
-    /// Single orientation resolution point. Explicit setting wins; Auto or
-    /// an absent monitor falls back to aspect (portrait → vertical).
-    /// Returns `true` for vertical.
-    pub fn effective_orientation(&self, device: &str, width: i32, height: i32) -> bool {
-        match self.screens.get(device).map(|s| s.orientation) {
-            Some(Orientation::Horizontal) => false,
-            Some(Orientation::Vertical) => true,
-            _ => height > width,
-        }
+    /// A monitor's entry: the section under its stable `id`, else the one
+    /// under its older `DISPLAYn` name, else defaults.
+    pub fn screen(&self, id: &str, legacy: &str) -> ScreenSettings {
+        self.screens.get(id).or_else(|| self.screens.get(legacy)).copied().unwrap_or_default()
     }
 
-    /// Configured display mode for a monitor; absent -> Clock.
-    pub fn screen_mode(&self, device: &str) -> Mode {
-        self.screens.get(device).map(|s| s.mode).unwrap_or(Mode::Clock)
+    /// Store a monitor's entry under its stable `id`, dropping the older
+    /// `DISPLAYn` section. The two match when Windows reports no id, so the
+    /// remove must come first.
+    pub fn set_screen(&mut self, id: &str, legacy: &str, sc: ScreenSettings) {
+        self.screens.remove(legacy);
+        self.screens.insert(id.to_string(), sc);
     }
 }
 
-/// Defaults when the file is missing; any other read error, or bytes that
-/// are not UTF-8, is an error so the dialog never saves over the file.
 pub fn load(path: &Path) -> std::io::Result<Settings> {
     match std::fs::read(path) {
         Ok(bytes) => String::from_utf8(bytes)
@@ -414,21 +422,18 @@ mod tests {
     }
 
     #[test]
-    fn effective_orientation_explicit_wins() {
-        let mut s = Settings::default();
-        s.screens.insert("DISPLAY1".into(), ScreenSettings { orientation: Orientation::Vertical, mode: Mode::Clock });
-        assert!(s.effective_orientation("DISPLAY1", 1920, 1080));
-        s.screens.insert("DISPLAY1".into(), ScreenSettings { orientation: Orientation::Horizontal, mode: Mode::Clock });
-        assert!(!s.effective_orientation("DISPLAY1", 1080, 1920));
-    }
-
-    #[test]
-    fn effective_orientation_auto_by_aspect() {
-        let s = Settings::default();
-        assert!(s.effective_orientation("DISPLAY1", 1080, 1920));
-        assert!(!s.effective_orientation("DISPLAY1", 1920, 1080));
-        // square is horizontal: the rule is strictly height > width
-        assert!(!s.effective_orientation("DISPLAY1", 1000, 1000));
+    fn vertical_explicit_wins_auto_by_aspect() {
+        let sc = |orientation| ScreenSettings { orientation, mode: Mode::Clock };
+        for (orientation, w, h, want) in [
+            (Orientation::Vertical, 1920, 1080, true),
+            (Orientation::Horizontal, 1080, 1920, false),
+            (Orientation::Auto, 1080, 1920, true),
+            (Orientation::Auto, 1920, 1080, false),
+            // square is horizontal: the rule is strictly height > width
+            (Orientation::Auto, 1000, 1000, false),
+        ] {
+            assert_eq!(sc(orientation).vertical(w, h), want, "{orientation:?} {w}x{h}");
+        }
     }
 
     #[test]
@@ -502,10 +507,24 @@ mod tests {
     }
 
     #[test]
-    fn screen_mode_resolves_with_clock_default() {
-        let mut s = Settings::default();
-        assert_eq!(s.screen_mode("MISSING"), Mode::Clock);
-        s.screens.insert("D1".into(), ScreenSettings { orientation: Orientation::Auto, mode: Mode::World });
-        assert_eq!(s.screen_mode("D1"), Mode::World);
+    fn screen_prefers_stable_id_then_legacy_name() {
+        const ID: &str = r"\\?\DISPLAY#GSM5B7F#5&1a2b3c4d&0&UID4352#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";
+        let world = ScreenSettings { orientation: Orientation::Auto, mode: Mode::World };
+        let vertical = ScreenSettings { orientation: Orientation::Vertical, mode: Mode::Clock };
+        let mut s = Settings::from_ini_text("[Screen DISPLAY1]\nMode=1\n");
+        // Absent everywhere -> defaults.
+        assert_eq!(s.screen(ID, "DISPLAY2"), ScreenSettings::default());
+        // Only the older DISPLAYn section -> migrated read.
+        assert_eq!(s.screen(ID, "DISPLAY1"), world);
+        // Writing under the stable id drops the DISPLAYn section and
+        // round-trips through the INI.
+        s.set_screen(ID, "DISPLAY1", vertical);
+        let text = s.to_ini_text();
+        assert!(!text.contains("[Screen DISPLAY1]"));
+        let mut s = Settings::from_ini_text(&text);
+        assert_eq!(s.screen(ID, "DISPLAY1"), vertical);
+        // No id reported: id == legacy, and the entry must survive.
+        s.set_screen("DISPLAY3", "DISPLAY3", world);
+        assert_eq!(s.screen("DISPLAY3", "DISPLAY3"), world);
     }
 }

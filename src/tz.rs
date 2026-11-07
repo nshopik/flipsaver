@@ -11,11 +11,6 @@ pub struct Zone {
     pub info: Option<DYNAMIC_TIME_ZONE_INFORMATION>,
 }
 
-fn key_to_string(key: &[u16; 128]) -> String {
-    let end = key.iter().position(|&c| c == 0).unwrap_or(key.len());
-    String::from_utf16_lossy(&key[..end])
-}
-
 /// Find the zone whose `TimeZoneKeyName` matches `id` case-insensitively.
 /// Enumerates until ERROR_NO_MORE_ITEMS; an index that fails to read is
 /// logged and skipped. `UTC` is a real Windows key and resolves through
@@ -33,7 +28,7 @@ pub fn resolve(id: &str) -> Option<DYNAMIC_TIME_ZONE_INFORMATION> {
             crate::screensaver::debug_log(&format!("flipsaver: timezone index {i} unreadable ({rc})"));
             continue;
         }
-        if key_to_string(&dtzi.TimeZoneKeyName).eq_ignore_ascii_case(id) {
+        if crate::screensaver::wide_to_string(&dtzi.TimeZoneKeyName).eq_ignore_ascii_case(id) {
             return Some(dtzi);
         }
     }
