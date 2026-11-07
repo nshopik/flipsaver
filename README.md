@@ -20,8 +20,8 @@ instead of the clock: pick **World** for that screen in the settings
 dialog. Each row is a city and its local time, with AM/PM (12 h mode)
 and a day-of-week column when the zone's date differs from yours.
 
-Six cities are preloaded (Los Angeles, New York, London, Dubai, Tokyo,
-Sydney). Edit the `[WorldClocks]` section of `Settings.ini` to change
+Eight cities are preloaded (Los Angeles, New York, London, Frankfurt,
+Moscow, Mumbai, Singapore, Tokyo). Edit the `[WorldClocks]` section of `Settings.ini` to change
 them — one `Label=Windows timezone name` line per row, shown in file
 order:
 

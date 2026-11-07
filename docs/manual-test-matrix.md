@@ -17,6 +17,8 @@ same machine.
 | 8 | Install via right-click → Install; runs from lock-screen idle | |
 | 9 | `--version` prints `Version: <tag> (<sha>), built for: windows-x86_64` | |
 | 10 | Delete/corrupt Settings.ini → `/s` runs with defaults (12h, scale 70) | |
+| 10a | Settings.ini saved as ANSI with `Zürich` (or locked by another process) → `/c` shows an error naming the file and opens no dialog; file unchanged | |
+| 10b | Settings.ini read-only → OK in `/c` shows a save error, dialog stays open | |
 | 11 | Portrait monitor with no `[Screen]` section renders vertical by default; landscape unchanged | |
 | 12 | `/c`: one row per monitor; setting Vertical on a landscape monitor then `/s` renders vertical | |
 | 13 | Mixed multi-monitor: one Horizontal + one Vertical override both honored simultaneously | |
@@ -34,17 +36,21 @@ same machine.
 | 23 | Hinge line stays visually static through the fold — no vertical smear (catches reversed matrix multiply) | |
 | 24 | No spurious flip in the first second after `/s` launch (first paint primes, no startup fold) | |
 | 25 | Absent `FlipAnimation` key in old `Settings.ini` → animation on by default | |
-| 26 | `/c`: select World on a monitor, `/s` → that monitor shows the board, others the clock; persists across restarts (`Mode=1` under `[Screen <name>]`) | |
-| 27 | First dialog OK writes the six default cities to `[WorldClocks]`; hand-edit (reorder/add/remove) is honored, row order matches file order | |
-| 28 | Date-boundary zones (Sydney/LA vs local): day column (`WED`) shown only when the zone's date differs from local; correct across local midnight | |
+| 26 | `/c`: select World on a monitor, `/s` → that monitor shows the board, others the clock; persists across restarts (`Mode=1` under `[Screen <device path>]`) | |
+| 27 | First dialog OK writes the eight default cities to `[WorldClocks]`; hand-edit (reorder/add/remove) is honored, row order matches file order | |
+| 28 | Date-boundary zones (Tokyo/LA vs local): day column (`WED`) shown only when the zone's date differs from local; correct across local midnight | |
 | 29 | 12/24 h setting applies to board rows (AM/PM cells only in 12 h) | |
 | 30 | Invalid timezone ID row renders city + `--:--`, logged via OutputDebugString; other rows unaffected | |
 | 31 | Empty `[WorldClocks]` section (all cities deleted) → World monitor falls back to the clock | |
 | 32 | Board minute tick flips only changed cells (fold animation); `FlipAnimation` off → instant swap | |
 | 33 | Board on single monitor; preview (`/p`) shows the board when the primary monitor is World, the clock otherwise | |
 | 34 | No grid reflow at midnight (day column always reserved) | |
-| 35 | Non-ASCII city label (e.g. `Zürich`) renders; label > 16 chars truncated | |
+| 35 | Non-ASCII city label (e.g. `Zürich`) renders; label > 16 chars truncated on the board and kept whole in `Settings.ini` after a dialog OK | |
 | 36 | "World size" slider resizes the board only (clock size unaffected); persists as `BoardScale`; absent key → 100% | |
+| 37 | During `/s`, Win+Ctrl+Shift+B (graphics driver reset) mid-fold on a clock and a World monitor: each repaints, no fold left stuck | |
+| 38 | During `/s`, change resolution or unplug a monitor: the saver exits, and starts again after the next idle timeout with no input | |
+| 39 | During `/s`, another app takes the foreground (e.g. a scheduled task opening a window): the saver exits | |
+| 40 | Select FlipSaver in Screen Saver Settings (preview running), switch to another saver, then close the dialog: no `flipsaver.scr` left in Task Manager | |
 
 ## Fidelity (side-by-side vs FlipIt, same machine)
 
