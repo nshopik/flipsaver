@@ -224,8 +224,13 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     };
                     ctx.0.screens.insert(device.clone(), sc);
                 }
-                let _ = settings::save(&settings::default_path(), &ctx.0);
-                let _ = EndDialog(hwnd, 1);
+                let path = settings::default_path();
+                match settings::save(&path, &ctx.0) {
+                    Ok(()) => {
+                        let _ = EndDialog(hwnd, 1);
+                    }
+                    Err(e) => error_box(Some(hwnd), &format!("Cannot save {}: {e}", path.display())),
+                }
                 1
             }
             id if id == IDCANCEL.0 => {

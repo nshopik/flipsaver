@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a locked, unreadable or non-UTF-8 file shows an error instead of
   opening the dialog with defaults. `/s` and `/p` decode such a file
   leniently.
+- **Failed save is reported**: OK in the settings dialog shows the
+  error and keeps the dialog open when `Settings.ini` cannot be written.
 - **UTF-8 BOM** at the start of `Settings.ini` no longer hides the
   first section.
 
