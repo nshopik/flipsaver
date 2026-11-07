@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leniently.
 - **Failed save is reported**: OK in the settings dialog shows the
   error and keeps the dialog open when `Settings.ini` cannot be written.
+- **City labels over 16 characters** survive a settings-dialog save;
+  the board still shows the first 16.
 - **UTF-8 BOM** at the start of `Settings.ini` no longer hides the
   first section.
 

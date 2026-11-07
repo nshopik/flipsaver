@@ -52,10 +52,6 @@ impl Default for ScreenSettings {
     }
 }
 
-// Labels cap at the board's cell budget so the parser and the renderer
-// can never disagree on width.
-use crate::board::LABEL_CELLS;
-
 fn default_world_clocks() -> Vec<(String, String)> {
     [
         ("Los Angeles", "Pacific Standard Time"),
@@ -156,10 +152,10 @@ impl Settings {
                     _ => {}
                 }
             } else if section == "WorldClocks" {
-                // key = label, value = Windows timezone key name. Labels cap
-                // at LABEL_CELLS; order preserved as written.
-                let label: String = key.trim().chars().take(LABEL_CELLS).collect();
-                s.world_clocks.push((label, value.trim().to_string()));
+                // key = label, value = Windows timezone key name; order
+                // preserved as written. The board truncates on display, so a
+                // save keeps the full label.
+                s.world_clocks.push((key.trim().to_string(), value.trim().to_string()));
             }
         }
         s
@@ -473,14 +469,13 @@ mod tests {
     }
 
     #[test]
-    fn worldclocks_preserve_order_and_truncate_labels() {
+    fn worldclocks_preserve_order_and_full_labels() {
         let s = Settings::from_ini_text(
             "[WorldClocks]\nParis=Romance Standard Time\nAn Extremely Long City Name=UTC\n",
         );
         assert_eq!(s.world_clocks.len(), 2);
         assert_eq!(s.world_clocks[0], ("Paris".to_string(), "Romance Standard Time".to_string()));
-        // 16-char cap
-        assert_eq!(s.world_clocks[1].0, "An Extremely Lon");
+        assert_eq!(s.world_clocks[1].0, "An Extremely Long City Name");
         assert_eq!(s.world_clocks[1].1, "UTC");
     }
 
