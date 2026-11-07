@@ -15,6 +15,9 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS_NAME: PCWSTR = w!("flipsaverwnd");
 
+/// Live saver windows; the message loop quits when the last one goes.
+static LIVE_WINDOWS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 static OSWALD_BOLD: &[u8] = include_bytes!("../assets/Oswald-Bold.ttf");
 
 /// Resolved font: the first installed SYSTEM_FONTS family, else the
@@ -332,6 +335,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
     if msg == WM_NCCREATE {
         let cs = &*(lp.0 as *const CREATESTRUCTW);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
+        LIVE_WINDOWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
     let state_ptr = state_of(hwnd);
@@ -366,10 +370,9 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             LRESULT(0)
         }
         WM_DESTROY => {
-            let was_preview = state.is_preview;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             drop(Box::from_raw(state_ptr));
-            if was_preview {
+            if LIVE_WINDOWS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed) == 1 {
                 PostQuitMessage(0);
             }
             LRESULT(0)
@@ -544,6 +547,10 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
 }
 
 unsafe fn pump() {
+    if LIVE_WINDOWS.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+        debug_log("flipsaver: no window created, exiting");
+        return;
+    }
     let mut msg = MSG::default();
     while GetMessageW(&mut msg, None, 0, 0).as_bool() {
         let _ = TranslateMessage(&msg);

@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dialog instead of crashing.
 - **Settings dialog is owned by the Control Panel window** passed in
   `/c:HWND`, so a second dialog cannot open behind it.
+- **No orphaned process**: the saver exits when it could not create
+  any window, or when its last window is closed from outside.
 - **UTF-8 BOM** at the start of `Settings.ini` no longer hides the
   first section.
 
