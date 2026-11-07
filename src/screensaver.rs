@@ -248,6 +248,7 @@ pub struct Monitor {
     pub id: String,
     /// GDI device name (`DISPLAY1`), the settings key before `id`.
     pub legacy: String,
+    pub primary: bool,
 }
 
 pub fn wide_to_string(w: &[u16]) -> String {
@@ -287,10 +288,11 @@ pub fn enumerate_monitors() -> Vec<Monitor> {
                 rect: info.monitorInfo.rcMonitor,
                 id: monitor_device_path(&info.szDevice).unwrap_or_else(|| legacy.clone()),
                 legacy,
+                primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
             });
         } else {
             // Failure → empty names → default settings downstream.
-            v.push(Monitor { rect: *rect, id: String::new(), legacy: String::new() });
+            v.push(Monitor { rect: *rect, id: String::new(), legacy: String::new(), primary: false });
         }
         TRUE
     }
@@ -621,6 +623,14 @@ pub fn run_preview(settings: Settings, parent: isize) {
         let Some(gfx) = logged("graphics init", Gfx::new()).map(std::rc::Rc::new) else {
             return;
         };
+        // The preview shows the primary monitor's face; orientation follows
+        // the preview's own aspect.
+        let mode = enumerate_monitors()
+            .into_iter()
+            .find(|m| m.primary)
+            .map(|m| settings.screen(&m.id, &m.legacy).mode)
+            .unwrap_or(crate::settings::Mode::Clock);
+        let screen = crate::settings::ScreenSettings { mode, ..Default::default() };
         // Same draw path as /s, including the 1 s timer, so the preview
         // minute stays live. Input-exit is disabled via is_preview; the
         // control panel terminates the process by destroying the parent.
@@ -635,9 +645,9 @@ pub fn run_preview(settings: Settings, parent: isize) {
                 mouse: None,
                 gfx,
                 target: None,
-                screen: Default::default(),
+                face: make_face(&settings, screen),
+                screen,
                 settings,
-                face: Face::Clock { cache: None, shown: None, hours_anim: None, minutes_anim: None },
             },
         );
         pump();
