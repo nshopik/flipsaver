@@ -447,6 +447,18 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
+        // Quit rather than draw on a stale monitor layout.
+        WM_DISPLAYCHANGE if !state.is_preview => {
+            PostQuitMessage(0);
+            LRESULT(0)
+        }
+        WM_SIZE => {
+            state.target = None;
+            reset_caches(state);
+            let _ = KillTimer(Some(hwnd), 2);
+            let _ = InvalidateRect(Some(hwnd), None, false);
+            LRESULT(0)
+        }
         WM_DPICHANGED => {
             // Layout is derived from physical pixel geometry; a DPI change
             // can change that geometry, so drop this window's caches and
