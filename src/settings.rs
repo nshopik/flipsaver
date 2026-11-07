@@ -212,9 +212,22 @@ impl Settings {
     }
 }
 
-pub fn load(path: &Path) -> Settings {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Settings::from_ini_text(&text),
+/// Defaults when the file is missing; any other read error, or bytes that
+/// are not UTF-8, is an error so the dialog never saves over the file.
+pub fn load(path: &Path) -> std::io::Result<Settings> {
+    match std::fs::read(path) {
+        Ok(bytes) => String::from_utf8(bytes)
+            .map(|text| Settings::from_ini_text(&text))
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "not UTF-8; re-save it as UTF-8")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
+        Err(e) => Err(e),
+    }
+}
+
+/// For `/s` and `/p`, which never write: decode lossily, defaults on error.
+pub fn load_or_default(path: &Path) -> Settings {
+    match std::fs::read(path) {
+        Ok(bytes) => Settings::from_ini_text(&String::from_utf8_lossy(&bytes)),
         Err(_) => Settings::default(),
     }
 }
@@ -330,8 +343,22 @@ mod tests {
 
     #[test]
     fn missing_file_gives_defaults() {
-        let s = load(Path::new("/nonexistent/definitely/Settings.ini"));
-        assert_eq!(s, Settings::default());
+        let path = Path::new("/nonexistent/definitely/Settings.ini");
+        assert_eq!(load(path).unwrap(), Settings::default());
+        assert_eq!(load_or_default(path), Settings::default());
+    }
+
+    #[test]
+    fn non_utf8_file_is_an_error_but_lossy_for_the_saver() {
+        let dir = std::env::temp_dir().join(format!("flipsaver-ansi-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Settings.ini");
+        // "Zürich" as saved by ANSI (Windows-1252) Notepad.
+        std::fs::write(&path, b"[WorldClocks]\r\nZ\xfcrich=W. Europe Standard Time\r\n").unwrap();
+        assert_eq!(load(&path).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        let s = load_or_default(&path);
+        assert_eq!(s.world_clocks, vec![("Z\u{FFFD}rich".to_string(), "W. Europe Standard Time".to_string())]);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
@@ -347,7 +374,7 @@ mod tests {
             ..Settings::default()
         };
         save(&path, &s).unwrap();
-        assert_eq!(load(&path), s);
+        assert_eq!(load(&path).unwrap(), s);
         std::fs::remove_dir_all(dir.parent().unwrap()).ok();
     }
 

@@ -238,6 +238,11 @@ unsafe extern "system" fn dlgproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     }
 }
 
+unsafe fn error_box(owner: Option<HWND>, text: &str) {
+    let text = windows::core::HSTRING::from(text);
+    MessageBoxW(owner, &text, windows::core::w!("FlipSaver Settings"), MB_OK | MB_ICONERROR);
+}
+
 pub fn run_config() {
     unsafe {
         // Trackbar class lives in comctl32; v6 activation comes from the
@@ -247,7 +252,15 @@ pub fn run_config() {
             dwICC: ICC_BAR_CLASSES,
         };
         let _ = InitCommonControlsEx(&icc);
-        let settings = settings::load(&settings::default_path());
+        let path = settings::default_path();
+        let settings = match settings::load(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                let text = format!("Cannot read {}: {e}\n\nFix or delete the file, then reopen settings.", path.display());
+                error_box(None, &text);
+                return;
+            }
+        };
         // One enumeration feeds both the template and the proc, so the
         // row→device mapping cannot desync.
         let monitors = crate::screensaver::enumerate_monitors();
