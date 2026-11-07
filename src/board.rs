@@ -47,15 +47,27 @@ pub fn weekday_abbr(dow: u8) -> &'static str {
     ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].get(dow as usize).copied().unwrap_or("???")
 }
 
-/// The changed cell indices between two equal-length rows. City-name cells
-/// never change after startup, so steady state is a handful of indices.
-pub fn diff_cells(old: &[char], new: &[char]) -> Vec<usize> {
-    old.iter()
-        .zip(new.iter())
-        .enumerate()
-        .filter(|(_, (a, b))| a != b)
-        .map(|(i, _)| i)
-        .collect()
+/// A board cell's rendered glyph, with room for an in-flight flip.
+pub struct CellState {
+    pub glyph: char,
+    pub anim: Option<crate::clock::Anim<char>>,
+}
+
+/// Move `cells` to the `next` glyphs, starting a flip on each changed cell
+/// when `animate`. Returns whether any cell changed. City-name cells never
+/// change after startup, so steady state touches a handful of cells.
+pub fn advance(cells: &mut [CellState], next: &[char], now_ms: u64, animate: bool) -> bool {
+    let mut changed = false;
+    for (cell, &glyph) in cells.iter_mut().zip(next) {
+        if cell.glyph != glyph {
+            if animate {
+                cell.anim = Some(crate::clock::Anim { from: cell.glyph, to: glyph, start_ms: now_ms });
+            }
+            cell.glyph = glyph;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// 12h: `H:MM` (hour 1..12, no leading zero); 24h: `HH:MM`. `None` renders
@@ -260,7 +272,7 @@ pub mod draw {
     pub fn draw_board(
         rt: &ID2D1HwndRenderTarget,
         cache: &BoardCache,
-        cells: &[crate::screensaver::CellState],
+        cells: &[super::CellState],
         now_ms: u64,
     ) -> Result<()> {
         unsafe {
@@ -354,11 +366,28 @@ mod tests {
     }
 
     #[test]
-    fn diff_cells_reports_changed_indices() {
-        let a: Vec<char> = "12:00".chars().collect();
-        let b: Vec<char> = "13:01".chars().collect();
-        assert_eq!(diff_cells(&a, &b), vec![1, 4]);
-        assert!(diff_cells(&a, &a).is_empty());
+    fn advance_flips_only_changed_cells() {
+        let cells = || -> Vec<CellState> {
+            "12:00".chars().map(|glyph| CellState { glyph, anim: None }).collect()
+        };
+        let next: Vec<char> = "13:01".chars().collect();
+
+        let mut c = cells();
+        assert!(advance(&mut c, &next, 500, true));
+        assert_eq!(c.iter().map(|c| c.glyph).collect::<String>(), "13:01");
+        let flipped: Vec<usize> = (0..c.len()).filter(|&i| c[i].anim.is_some()).collect();
+        assert_eq!(flipped, vec![1, 4]);
+        let a = c[1].anim.as_ref().unwrap();
+        assert_eq!((a.from, a.to, a.start_ms), ('2', '3', 500));
+
+        // Animation off: glyphs swap, nothing folds.
+        let mut c = cells();
+        assert!(advance(&mut c, &next, 500, false));
+        assert!(c.iter().all(|c| c.anim.is_none()));
+
+        let mut c = cells();
+        let same: Vec<char> = "12:00".chars().collect();
+        assert!(!advance(&mut c, &same, 500, true));
     }
 
     #[test]
