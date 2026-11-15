@@ -148,20 +148,52 @@ impl<T> Anim<T> {
     }
 }
 
-/// Drop a finished flip; true while it is still running.
-pub fn retire<T>(anim: &mut Option<Anim<T>>, now_ms: u64) -> bool {
-    if anim.as_ref().is_some_and(|a| a.progress(now_ms) >= 1.0) {
-        *anim = None;
-    }
-    anim.is_some()
+/// One split-flap position: the value it shows and, while it changes, the
+/// flip from the old value. The clock's row is (hours, minutes); the
+/// board's is one flap per character.
+pub struct Flap<T> {
+    pub value: T,
+    pub anim: Option<Anim<T>>,
 }
 
-/// Which boxes (hours, minutes) fold when the face moves from `shown` to
-/// `now`. A face not yet painted (`None`) or with animation off never folds.
-pub fn flips(shown: Option<(u32, u32)>, now: (u32, u32), animate: bool) -> (bool, bool) {
-    match shown {
-        Some((h, m)) if animate => (h != now.0, m != now.1),
-        _ => (false, false),
+/// Move `row` to `next`, starting a flip on each changed flap when
+/// `animate`. A row of another length (empty before the first paint) takes
+/// `next` with no flip. Returns whether any value changed.
+pub fn advance<T: Copy + PartialEq>(row: &mut Vec<Flap<T>>, next: &[T], now_ms: u64, animate: bool) -> bool {
+    if row.len() != next.len() {
+        *row = next.iter().map(|&value| Flap { value, anim: None }).collect();
+        return true;
+    }
+    let mut changed = false;
+    for (flap, &value) in row.iter_mut().zip(next) {
+        if flap.value != value {
+            if animate {
+                flap.anim = Some(Anim { from: flap.value, to: value, start_ms: now_ms });
+            }
+            flap.value = value;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Drop finished flips; true while any is still running.
+pub fn retire<T>(row: &mut [Flap<T>], now_ms: u64) -> bool {
+    let mut active = false;
+    for flap in row {
+        if flap.anim.as_ref().is_some_and(|a| a.progress(now_ms) >= 1.0) {
+            flap.anim = None;
+        }
+        active |= flap.anim.is_some();
+    }
+    active
+}
+
+/// Abandon in-flight flips, keeping the values.
+#[cfg(windows)]
+pub fn settle<T>(row: &mut [Flap<T>]) {
+    for flap in row {
+        flap.anim = None;
     }
 }
 const MAX_SHADE: f32 = 0.55;
@@ -501,13 +533,12 @@ pub mod draw {
             rt: &ID2D1HwndRenderTarget,
             bl: &BoxLayout,
             is_hours: bool,
-            settled: u32,
-            anim: Option<&super::Anim<u32>>,
+            flap: &super::Flap<u32>,
             now_ms: u64,
         ) -> Result<()> {
-            match anim {
+            match &flap.anim {
                 None => {
-                    let (t, m) = box_text(is_hours, settled, self.is_24h);
+                    let (t, m) = box_text(is_hours, flap.value, self.is_24h);
                     self.draw_box(rt, bl, &t, m)
                 }
                 Some(a) => {
@@ -545,14 +576,15 @@ pub mod draw {
     pub fn draw_face(
         rt: &ID2D1HwndRenderTarget,
         cache: &FaceCache,
-        shown: (u32, u32),
-        hours_anim: Option<&super::Anim<u32>>,
-        minutes_anim: Option<&super::Anim<u32>>,
+        row: &[super::Flap<u32>],
         now_ms: u64,
     ) -> Result<()> {
+        let [hours, minutes] = row else {
+            return Ok(());
+        };
         unsafe {
-            cache.draw_box_animated(rt, &cache.layout.hours, true, shown.0, hours_anim, now_ms)?;
-            cache.draw_box_animated(rt, &cache.layout.minutes, false, shown.1, minutes_anim, now_ms)?;
+            cache.draw_box_animated(rt, &cache.layout.hours, true, hours, now_ms)?;
+            cache.draw_box_animated(rt, &cache.layout.minutes, false, minutes, now_ms)?;
             Ok(())
         }
     }
@@ -673,26 +705,39 @@ mod tests {
     }
 
     #[test]
-    fn flips_table() {
-        for (shown, now, animate, want) in [
-            (None, (9, 0), true, (false, false)),           // first paint primes, no fold
-            (Some((9, 0)), (9, 0), true, (false, false)),   // no change
-            (Some((9, 0)), (9, 1), true, (false, true)),    // minute
-            (Some((9, 59)), (10, 0), true, (true, true)),   // top of hour
-            (Some((9, 59)), (10, 0), false, (false, false)), // animation off
+    fn advance_table() {
+        let flaps = |v: &[u32]| -> Vec<Flap<u32>> { v.iter().map(|&value| Flap { value, anim: None }).collect() };
+        for (start, next, animate, changed, flipped) in [
+            (&[][..], &[9, 0][..], true, true, &[][..]),     // first paint primes, no flip
+            (&[9, 0], &[9, 0], true, false, &[]),            // no change
+            (&[9, 0], &[9, 1], true, true, &[1]),            // minute
+            (&[9, 59], &[10, 0], true, true, &[0, 1]),       // top of hour
+            (&[9, 59], &[10, 0], false, true, &[]),          // animation off
+            (&[1, 2, 0, 0], &[1, 3, 0, 1], true, true, &[1, 3]), // board: only changed flaps
         ] {
-            assert_eq!(flips(shown, now, animate), want, "{shown:?} -> {now:?}");
+            let mut row = flaps(start);
+            assert_eq!(advance(&mut row, next, 500, animate), changed, "{start:?} -> {next:?}");
+            assert_eq!(row.iter().map(|f| f.value).collect::<Vec<_>>(), next);
+            let got: Vec<usize> = (0..row.len()).filter(|&i| row[i].anim.is_some()).collect();
+            assert_eq!(got, flipped, "{start:?} -> {next:?}");
+            for &i in flipped {
+                let a = row[i].anim.as_ref().unwrap();
+                assert_eq!((a.from, a.to, a.start_ms), (start[i], next[i], 500));
+            }
         }
     }
 
     #[test]
     fn retire_drops_only_finished() {
-        let mut a = Some(Anim { from: 1u32, to: 2, start_ms: 1000 });
-        assert!(retire(&mut a, 1000 + FLIP_MS as u64 - 1));
-        assert!(a.is_some());
-        assert!(!retire(&mut a, 1000 + FLIP_MS as u64));
-        assert!(a.is_none());
-        assert!(!retire::<u32>(&mut None, 0));
+        let mut row = vec![
+            Flap { value: 2u32, anim: Some(Anim { from: 1, to: 2, start_ms: 1000 }) },
+            Flap { value: 5, anim: None },
+        ];
+        assert!(retire(&mut row, 1000 + FLIP_MS as u64 - 1));
+        assert!(row[0].anim.is_some());
+        assert!(!retire(&mut row, 1000 + FLIP_MS as u64));
+        assert!(row[0].anim.is_none());
+        assert!(!retire::<u32>(&mut [], 0));
     }
 
     #[test]
