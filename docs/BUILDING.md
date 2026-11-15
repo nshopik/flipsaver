@@ -4,13 +4,13 @@ Cross-compiled for Windows from WSL2. No Windows toolchain required.
 
 ## One-time setup
 
-    cargo install cargo-xwin --version 0.23.0 --locked
+    cargo install cargo-xwin --version 0.23.1 --locked
     sudo apt-get install -y clang lld llvm-19
 
 Pinned versions (splat layout drifts across xwin releases — if a build
 breaks after reinstalling, reinstall exactly these):
 
-- cargo-xwin: 0.23.0
+- cargo-xwin: 0.23.1
 - rustc: 1.98.1 (48a229cea 2026-09-01), pinned with its target in
   `rust-toolchain.toml`
 - llvm: 19 (provides llvm-rc-19 for manifest resource compilation on cross-compile)
