@@ -141,15 +141,13 @@ pub fn debug_log(line: &str) {
 pub enum Face {
     Clock {
         cache: Option<crate::clock::draw::FaceCache>,
-        /// None until the first paint reads the time.
-        shown: Option<(u32, u32)>,
-        hours_anim: Option<crate::clock::Anim<u32>>,
-        minutes_anim: Option<crate::clock::Anim<u32>>,
+        /// (hours, minutes); empty until the first paint reads the time.
+        flaps: Vec<crate::clock::Flap<u32>>,
     },
     Board {
         zones: Vec<crate::tz::Zone>,
         cache: Option<crate::board::draw::BoardCache>,
-        cells: Vec<crate::board::CellState>,
+        cells: Vec<crate::clock::Flap<char>>,
     },
 }
 
@@ -180,6 +178,12 @@ fn board_cells(zones: &[crate::tz::Zone], grid: &crate::board::Grid, is_24h: boo
     cells
 }
 
+/// Local (hours, minutes) for the clock's flap row.
+fn clock_values() -> [u32; 2] {
+    let st = unsafe { GetLocalTime() };
+    [st.wHour as u32, st.wMinute as u32]
+}
+
 /// Choose the face for a window. World mode needs at least one
 /// resolvable zone; otherwise (empty list or all invalid) fall back to the
 /// clock, decided once here.
@@ -191,21 +195,20 @@ fn make_face(settings: &Settings, screen: crate::settings::ScreenSettings) -> Fa
         }
         debug_log("flipsaver: no resolvable zones, falling back to clock");
     }
-    Face::Clock { cache: None, shown: None, hours_anim: None, minutes_anim: None }
+    Face::Clock { cache: None, flaps: Vec::new() }
 }
 
 /// Drop device-dependent caches and abandon any in-flight animation, keeping
-/// the face and (for a board) its resolved zones.
+/// the face, its shown values and (for a board) its resolved zones.
 fn reset_caches(state: &mut WindowState) {
     match &mut state.face {
-        Face::Clock { cache, hours_anim, minutes_anim, .. } => {
+        Face::Clock { cache, flaps } => {
             *cache = None;
-            *hours_anim = None;
-            *minutes_anim = None;
+            crate::clock::settle(flaps);
         }
         Face::Board { cache, cells, .. } => {
             *cache = None;
-            cells.clear();
+            crate::clock::settle(cells);
         }
     }
 }
@@ -415,7 +418,7 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 let now = GetTickCount64();
                 let is_24h = state.settings.display_24hr;
                 match &mut state.face {
-                    Face::Clock { cache, shown, hours_anim, minutes_anim } => {
+                    Face::Clock { cache, flaps } => {
                         if cache.is_none() {
                             let vertical = state.screen.vertical(w, h);
                             *cache = logged("clock face", crate::clock::draw::FaceCache::new(
@@ -423,13 +426,10 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                             ));
                         }
                         if let Some(face) = cache {
-                            let shown = *shown.get_or_insert_with(|| {
-                                let st = GetLocalTime();
-                                (st.wHour as u32, st.wMinute as u32)
-                            });
-                            logged("draw clock", crate::clock::draw::draw_face(
-                                &rt, face, shown, hours_anim.as_ref(), minutes_anim.as_ref(), now,
-                            ));
+                            if flaps.is_empty() {
+                                crate::clock::advance(flaps, &clock_values(), now, false);
+                            }
+                            logged("draw clock", crate::clock::draw::draw_face(&rt, face, flaps, now));
                         }
                     }
                     Face::Board { zones, cache, cells } => {
@@ -438,15 +438,11 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                                 w, h, state.settings.board_scale, zones.len(), is_24h,
                             );
                             *cache = logged("board", crate::board::draw::BoardCache::new(&rt, &state.gfx, grid));
-                            if let Some(bc) = cache {
-                                let glyphs = board_cells(zones, &bc.grid, is_24h);
-                                *cells = glyphs
-                                    .into_iter()
-                                    .map(|glyph| crate::board::CellState { glyph, anim: None })
-                                    .collect();
-                            }
                         }
                         if let Some(bc) = cache {
+                            if cells.is_empty() {
+                                crate::clock::advance(cells, &board_cells(zones, &bc.grid, is_24h), now, false);
+                            }
                             logged("draw board", crate::board::draw::draw_board(&rt, bc, cells, now));
                         }
                     }
@@ -493,64 +489,38 @@ pub unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             let now = GetTickCount64();
             match wp.0 {
                 1 => {
-                    match &mut state.face {
-                        Face::Clock { cache, shown, hours_anim, minutes_anim } => {
+                    let animate = state.settings.flip_animation;
+                    let changed = match &mut state.face {
+                        Face::Clock { cache, flaps } => {
                             // A failed face build retries on the next paint.
                             if cache.is_none() {
                                 let _ = InvalidateRect(Some(hwnd), None, false);
                             }
-                            let st = GetLocalTime();
-                            let (h, m) = (st.wHour as u32, st.wMinute as u32);
-                            let (fold_h, fold_m) = crate::clock::flips(*shown, (h, m), state.settings.flip_animation);
-                            if let Some((from_h, from_m)) = *shown {
-                                if fold_h {
-                                    *hours_anim = Some(crate::clock::Anim { from: from_h, to: h, start_ms: now });
-                                }
-                                if fold_m {
-                                    *minutes_anim = Some(crate::clock::Anim { from: from_m, to: m, start_ms: now });
-                                }
-                            }
-                            if *shown != Some((h, m)) {
-                                *shown = Some((h, m));
-                                if fold_h || fold_m {
-                                    SetTimer(Some(hwnd), 2, 16, None);
-                                }
-                                let _ = InvalidateRect(Some(hwnd), None, false);
-                            }
+                            crate::clock::advance(flaps, &clock_values(), now, animate)
                         }
-                        Face::Board { zones, cache, cells } => {
-                            if let Some(bc) = cache {
-                                let is_24h = state.settings.display_24hr;
-                                let next = board_cells(zones, &bc.grid, is_24h);
-                                let animate = state.settings.flip_animation;
-                                if crate::board::advance(cells, &next, now, animate) {
-                                    if animate {
-                                        SetTimer(Some(hwnd), 2, 16, None);
-                                    }
-                                    let _ = InvalidateRect(Some(hwnd), None, false);
-                                }
-                            } else {
-                                let _ = InvalidateRect(Some(hwnd), None, false);
-                            }
+                        Face::Board { zones, cache: Some(bc), cells } => {
+                            let next = board_cells(zones, &bc.grid, state.settings.display_24hr);
+                            crate::clock::advance(cells, &next, now, animate)
                         }
+                        Face::Board { cache: None, .. } => {
+                            let _ = InvalidateRect(Some(hwnd), None, false);
+                            false
+                        }
+                    };
+                    if changed {
+                        if animate {
+                            SetTimer(Some(hwnd), 2, 16, None);
+                        }
+                        let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                     LRESULT(0)
                 }
                 2 => {
                     // Fast tick: advance the fold; retire finished anims.
-                    let mut any_active = false;
-                    match &mut state.face {
-                        Face::Clock { hours_anim, minutes_anim, .. } => {
-                            let h = crate::clock::retire(hours_anim, now);
-                            let m = crate::clock::retire(minutes_anim, now);
-                            any_active = h || m;
-                        }
-                        Face::Board { cells, .. } => {
-                            for c in cells.iter_mut() {
-                                any_active |= crate::clock::retire(&mut c.anim, now);
-                            }
-                        }
-                    }
+                    let any_active = match &mut state.face {
+                        Face::Clock { flaps, .. } => crate::clock::retire(flaps, now),
+                        Face::Board { cells, .. } => crate::clock::retire(cells, now),
+                    };
                     if !any_active {
                         let _ = KillTimer(Some(hwnd), 2);
                     }
