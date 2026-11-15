@@ -28,7 +28,7 @@ jobs:
         run: cargo test
 
       - name: Install cargo-xwin
-        run: cargo install cargo-xwin --version 0.23.0 --locked
+        run: cargo install cargo-xwin --version 0.23.1 --locked
 
       - name: Build
         env:
